@@ -48,7 +48,7 @@ class FramesReq(BaseModel):
 
 @app.post("/skus/{sku_code}/frames")
 def register_frames(sku_code: str, body: FramesReq):
-    db = SessionLocal()
+    db = get_session()
     try:
         sku = db.execute(select(SKU).where(SKU.sku_code == sku_code)).scalar_one_or_none()
         if not sku:
