@@ -6,9 +6,8 @@ services:
     buildCommand: |
       python -V
       pip install --upgrade pip
-      # более устойчивый инсталлер: без кэша, с увеличенным таймаутом и ретраями
       pip install --no-cache-dir --default-timeout=120 --retries 5 -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}
+    startCommand: PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}
     plan: starter
     envVars:
       - key: DATABASE_URL
