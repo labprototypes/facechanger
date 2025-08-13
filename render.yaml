@@ -8,7 +8,6 @@ services:
     startCommand: npm run start
     plan: starter
     envVars:
-      # прокинем публичный URL API во фронт
       - key: NEXT_PUBLIC_API_BASE_URL
         fromService:
           type: web
@@ -21,13 +20,12 @@ services:
     env: python
     rootDir: apps/api
     buildCommand: pip install -r requirements.txt
-    # слушаем $PORT (требование Render)
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}
     plan: starter
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: pg
+          name: fcdb          # <— новое имя базы
           property: connectionString
       - key: REDIS_URL
         fromService:
@@ -67,32 +65,13 @@ services:
           type: redis
           name: redis
           property: connectionString
-      # если воркеру понадобятся доступы к S3/Replicate — раскомментируй
-      # - key: S3_ENDPOINT
-      #   value: https://s3.amazonaws.com
-      # - key: S3_REGION
-      #   value: us-east-1
-      # - key: S3_BUCKET
-      #   value: your-bucket-name
-      # - key: AWS_ACCESS_KEY_ID
-      #   sync: false
-      # - key: AWS_SECRET_ACCESS_KEY
-      #   sync: false
-      # - key: REPLICATE_API_TOKEN
-      #   sync: false
-      # - key: REPLICATE_MODEL
-      #   value: owner/model:version
-      # - key: REPLICATE_WEBHOOK_SECRET
-      #   sync: false
 
-  # ---- REDIS ----
+  # ---- REDIS (Key Value) ----
   - type: redis
     name: redis
     ipAllowList: []
 
 databases:
-  - name: pg
-    # ВАЖНО: используем новый план, а не legacy 'starter'
-    plan: basic-256mb               # можно выбрать basic-1gb / basic-4gb и т.д.
-    postgresMajorVersion: '17'      # опционально; можно убрать
-    # diskSizeGB: 15                # опционально (1 или кратно 5; Basic по умолчанию 15 ГБ)
+  - name: fcdb               # <— новое имя (НЕ начинается с pg)
+    plan: basic-256mb
+    postgresMajorVersion: '17'
