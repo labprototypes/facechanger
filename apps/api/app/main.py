@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import select
 from .config import settings
-from .database import init_db, SessionLocal
+from .database import init_db, get_session
 from .models import SKU, Frame
 from .s3 import presign_put, public_url
 from .webhooks import router as webhooks_router
