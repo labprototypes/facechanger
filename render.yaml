@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: web-frontend
-    env: node
-    rootDir: apps/web
-    buildCommand: npm install && npm run build
-    startCommand: npm run start
+    name: api-backend
+    env: python
+    rootDir: apps/api
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}
     plan: starter
     envVars:
       - key: NEXT_PUBLIC_API_BASE_URL
