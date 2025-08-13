@@ -10,13 +10,24 @@ class Base(DeclarativeBase):
 _engine = None
 _SessionLocal = None
 
+def _normalize_pg_url(url: str) -> str:
+    """
+    Render обычно отдаёт URL вида postgres://... или postgresql://...
+    Для psycopg v3 нужно явное postgresql+psycopg://
+    """
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://") and "+psycopg" not in url:
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return url
+
 def get_engine():
     global _engine
     if _engine is None:
         url = settings.database_url
         if not url:
-            # Сделаем явную ошибку, чтобы лог был понятнее
             raise RuntimeError("DATABASE_URL is not set")
+        url = _normalize_pg_url(url)
         _engine = create_engine(url, pool_pre_ping=True)
     return _engine
 
