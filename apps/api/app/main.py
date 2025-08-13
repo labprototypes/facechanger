@@ -6,8 +6,10 @@ from .config import settings
 from .database import init_db, SessionLocal
 from .models import SKU, Frame
 from .s3 import presign_put, public_url
+from .webhooks import router as webhooks_router
 
 app = FastAPI(title="SKU HeadSwap API")
+app.include_router(webhooks_router)
 
 origins = [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()]
 app.add_middleware(
