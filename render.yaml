@@ -1,24 +1,28 @@
 services:
+  # ---- FRONTEND (Next.js) ----
   - type: web
-    name: api-backend
-    env: python
-    rootDir: apps/api
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}
+    name: web-frontend
+    env: node
+    rootDir: apps/web
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     plan: starter
     envVars:
+      # прокидываем в фронт публичный URL API
       - key: NEXT_PUBLIC_API_BASE_URL
         fromService:
           type: web
           name: api-backend
           envVarKey: RENDER_EXTERNAL_URL
 
+  # ---- BACKEND (FastAPI) ----
   - type: web
     name: api-backend
     env: python
     rootDir: apps/api
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port 10000
+    # важно слушать переменную PORT на Render
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}
     plan: starter
     envVars:
       - key: DATABASE_URL
@@ -48,12 +52,8 @@ services:
         sync: false
       - key: CORS_ALLOW_ORIGINS
         value: "*"
-      - key: API_BASE_URL
-        fromService:
-          type: web
-          name: api-backend
-          envVarKey: RENDER_EXTERNAL_URL
 
+  # ---- WORKER (Celery) ----
   - type: worker
     name: celery-worker
     env: python
@@ -67,7 +67,25 @@ services:
           type: redis
           name: redis
           property: connectionString
+      # если воркеру нужны доступы к S3/Replicate — добавим те же секреты
+      - key: S3_ENDPOINT
+        value: https://s3.amazonaws.com
+      - key: S3_REGION
+        value: us-east-1
+      - key: S3_BUCKET
+        value: your-bucket-name
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: REPLICATE_API_TOKEN
+        sync: false
+      - key: REPLICATE_MODEL
+        value: owner/model:version
+      - key: REPLICATE_WEBHOOK_SECRET
+        sync: false
 
+  # ---- REDIS ----
   - type: redis
     name: redis
     ipAllowList: []
