@@ -42,11 +42,8 @@ services:
     name: celery-worker
     env: python
     rootDir: apps/worker
-    buildCommand: |
-      python -V
-      pip install --upgrade pip
-      pip install --no-cache-dir --default-timeout=120 --retries 5 -r requirements.txt
-    startCommand: celery -A worker.app worker --loglevel=INFO --concurrency=2
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A worker worker --loglevel=INFO --concurrency=2
     plan: starter
     envVars:
       - key: REDIS_URL
@@ -54,6 +51,25 @@ services:
           type: redis
           name: redis
           property: connectionString
+      - key: API_BASE_URL
+        fromService:
+          type: web
+          name: api-backend
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: S3_ENDPOINT
+        value: https://s3.amazonaws.com
+      - key: S3_REGION
+        value: us-east-1
+      - key: S3_BUCKET
+        value: your-bucket-name
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: REPLICATE_API_TOKEN
+        sync: false
+      - key: REPLICATE_MODEL
+        value: labprototypes/tnkfwm2:<your_version_sha>
 
   # ---- REDIS (Key Value) ----
   - type: redis
