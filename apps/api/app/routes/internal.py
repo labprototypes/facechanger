@@ -1,49 +1,41 @@
-from fastapi import APIRouter, HTTPException
-from sqlalchemy.orm import joinedload
-from ..database import db_session
-from ..models import SKU, Frame, FrameStatus, Generation, GenStatus
-from ..s3util import public_url
+import uuid
+from fastapi import APIRouter
 
-router = APIRouter(prefix="/internal")
+router = APIRouter(tags=["internal"])
 
-@router.get("/sku/{sku_id}/frames")
-def sku_frames(sku_id: int):
-    db = db_session()
-    sku = db.query(SKU).options(joinedload(SKU.frames)).filter(SKU.id == sku_id).first()
-    if not sku: raise HTTPException(404, "not found")
-    return {"frames": [{"id": f.id} for f in sku.frames]}
-
-@router.get("/frame/{frame_id}")
-def frame_info(frame_id: int):
-    db = db_session()
-    fr = db.query(Frame).join(SKU).options(joinedload(Frame.sku), joinedload(SKU.head)).filter(Frame.id == frame_id).first()
-    if not fr: raise HTTPException(404, "not found")
-    return {
-        "id": fr.id,
-        "sku": {"id": fr.sku.id, "code": fr.sku.code},
-        "head": fr.sku.head and {
-            "id": fr.sku.head.id,
-            "trigger_token": fr.sku.head.trigger_token,
-            "prompt_template": fr.sku.head.prompt_template,
+# Простейшие in-memory заглушки (чтоб воркеру было что дергать)
+# frame -> минимальный набор, который воркер ждёт
+_FRAMES = {
+    1: {
+        "id": 1,
+        "sku": {"code": "SKU-DEMO"},
+        # любой общедоступный URL для теста; заменим на S3 позже
+        "original_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/59/Empty.png/640px-Empty.png",
+        "head": {
+            "trigger_token": "tnkfwm1",
+            "prompt_template": "a photo of {token} female model",
         },
-        "original_url": public_url(fr.original_key),
     }
+}
+_SKU_FRAMES = {100: [1]}
+_GENERATIONS = {}
 
-@router.post("/frame/{frame_id}/generation")
-def create_generation(frame_id: int):
-    db = db_session()
-    fr = db.query(Frame).filter(Frame.id == frame_id).first()
-    if not fr: raise HTTPException(404, "frame not found")
-    fr.status = FrameStatus.RUNNING
-    gen = Generation(frame_id=frame_id, status=GenStatus.RUNNING)
-    db.add(gen); db.commit(); db.refresh(gen)
-    return {"id": gen.id}
+@router.get("/internal/sku/{sku_id}/frames")
+async def list_frames_for_sku(sku_id: int):
+    ids = _SKU_FRAMES.get(sku_id, [])
+    return {"frames": [_FRAMES[i] for i in ids]}
 
-@router.post("/generation/{gen_id}/prediction")
-def set_prediction(gen_id: int, payload: dict):
-    db = db_session()
-    gen = db.query(Generation).filter(Generation.id == gen_id).first()
-    if not gen: raise HTTPException(404, "generation not found")
-    gen.replicate_prediction_id = payload.get("prediction_id")
-    db.commit()
+@router.get("/internal/frame/{frame_id}")
+async def get_frame(frame_id: int):
+    return _FRAMES[frame_id]
+
+@router.post("/internal/frame/{frame_id}/generation")
+async def create_generation(frame_id: int):
+    gen_id = str(uuid.uuid4())
+    _GENERATIONS[gen_id] = {"frame_id": frame_id}
+    return {"id": gen_id}
+
+@router.post("/internal/generation/{gen_id}/prediction")
+async def attach_prediction(gen_id: str, payload: dict):
+    _GENERATIONS.setdefault(gen_id, {}).update(payload)
     return {"ok": True}
