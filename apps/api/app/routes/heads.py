@@ -1,25 +1,25 @@
-from fastapi import APIRouter, HTTPException
-from ..database import db_session
-from ..models import HeadProfile
-from ..schemas import HeadCreate, HeadOut
+from fastapi import APIRouter
 
-router = APIRouter()
+router = APIRouter(prefix="/heads", tags=["heads"])
 
-@router.post("/", response_model=HeadOut)
-def create_head(body: HeadCreate):
-    db = db_session()
-    existing = db.query(HeadProfile).filter(HeadProfile.name == body.name).first()
-    if existing: return existing
-    hp = HeadProfile(
-        name=body.name,
-        replicate_model=body.replicate_model,
-        trigger_token=body.trigger_token,
-        prompt_template=body.prompt_template,
-    )
-    db.add(hp); db.commit(); db.refresh(hp)
-    return hp
+# Заглушечный список голов (профилей). "Маша" = tnkfwm1
+HEADS = [
+    {
+        "id": 1,
+        "name": "Маша",
+        "model": "labprototypes/tnkfwm2",
+        "trigger_token": "tnkfwm1",
+        "prompt_template": "a photo of {token} female model",
+    }
+]
 
-@router.get("/", response_model=list[HeadOut])
-def list_heads():
-    db = db_session()
-    return db.query(HeadProfile).order_by(HeadProfile.id.desc()).all()
+@router.get("")
+async def list_heads():
+    return {"items": HEADS}
+
+@router.get("/{head_id}")
+async def get_head(head_id: int):
+    for h in HEADS:
+        if h["id"] == head_id:
+            return h
+    return {"detail": "not found"}
