@@ -2,5 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
-* { box-sizing: border-box; }
-body { margin: 0; background: #f2f2f2; color: #000; }
+:root{
+  --bg:#f2f2f2;
+  --text:#000000;
+  --surface:#ffffff;
+  --accent:#B8FF01;
+}
+body{background:var(--bg);color:var(--text);}
