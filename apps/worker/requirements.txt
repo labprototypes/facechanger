@@ -1,5 +1,8 @@
 celery==5.4.0
 redis==5.0.7
-boto3==1.34.153
 httpx==0.27.0
-python-dotenv==1.0.1
+boto3==1.34.153
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
+Pillow==10.4.0
+python-dotenv==1.1.1
