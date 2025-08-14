@@ -1,32 +1,31 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sqlalchemy import select
 from .config import settings
-from .database import init_db, get_session
-from .models import SKU, Frame
-from .s3 import presign_put, public_url
+from .database import init_db
+from .routes.skus import router as skus_router
+from .routes.heads import router as heads_router
+from .routes.internal import router as internal_router
 from .webhooks import router as webhooks_router
 
-app = FastAPI(title="SKU HeadSwap API")
-app.include_router(webhooks_router)
+app = FastAPI(title="Facechanger API")
 
-origins = [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins or ["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()] or ["*"],
+    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
 @app.on_event("startup")
-def startup():
-    init_db()
+def startup(): init_db()
 
 @app.get("/health")
-def health():
-    return {"ok": True}
+def health(): return {"ok": True}
+
+app.include_router(skus_router, prefix="/skus", tags=["skus"])
+app.include_router(heads_router, prefix="/heads", tags=["heads"])
+app.include_router(internal_router, tags=["internal"])
+app.include_router(webhooks_router, tags=["webhooks"])
+
 
 # ---------- Upload presigned URLs ----------
 class UploadReq(BaseModel):
