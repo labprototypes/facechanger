@@ -1,5 +1,9 @@
 import React, { useMemo, useState } from "react";
-import { CalendarDays, Search, Package, ChevronLeft, ChevronRight, RefreshCcw, Filter, CheckCircle2, AlertCircle, Clock, ArrowUpRight, Download } from "lucide-react";
+import { useRouter } from "next/router";
+import {
+  CalendarDays, Search, Package, ChevronLeft, ChevronRight, RefreshCcw,
+  Filter, CheckCircle2, AlertCircle, Clock, ArrowUpRight, Download
+} from "lucide-react";
 
 const BG = "#f5f5f5"; const TEXT = "#000000"; const SURFACE = "#ffffff"; const ACCENT = "#B8FF01";
 
@@ -17,13 +21,18 @@ const MOCK_SKUS: Record<string, SkuRow[]> = Object.fromEntries(MOCK_BATCHES.map(
 const percent = (part: number, total: number) => total ? Math.round((part/total)*100) : 0;
 
 export default function DashboardBatches() {
+  const router = useRouter(); // <— добавили
   const [batches] = useState<Batch[]>(MOCK_BATCHES);
   const [activeBatchId, setActiveBatchId] = useState<string>(batches[0]?.id ?? "");
-  const [query, setQuery] = useState(""); const [statusFilter, setStatusFilter] = useState<"ALL" | SkuRow["status"]>("ALL");
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | SkuRow["status"]>("ALL");
+
   const activeBatch = useMemo(() => batches.find(b => b.id === activeBatchId)!, [batches, activeBatchId]);
   const rowsRaw = useMemo(() => MOCK_SKUS[activeBatchId] || [], [activeBatchId]);
   const rows = useMemo(() => rowsRaw.filter(r => statusFilter === "ALL" ? true : r.status === statusFilter), [rowsRaw, statusFilter]);
-  const goToSku = (sku: string) => { alert(`Перейти к карточке SKU: ${sku}`); };
+
+  // было: alert(...). стало: переход на страницу SKU
+  const goToSku = (sku: string) => router.push(`/sku/${encodeURIComponent(sku)}`);
 
   const sortedBatches = useMemo(() => [...batches].sort((a,b) => (a.date < b.date ? 1 : -1)), [batches]);
   const activeIndex = sortedBatches.findIndex(b => b.id === activeBatchId);
@@ -61,9 +70,22 @@ export default function DashboardBatches() {
             <div className="flex items-center gap-3">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2" size={18} />
-                <input placeholder="Поиск по SKU..." value={query} onChange={(e) => setQuery(e.target.value.toUpperCase())} onKeyDown={(e) => { if (e.key === 'Enter' && query.trim()) goToSku(query.trim()); }} className="pl-10 pr-3 py-2 w-full rounded-xl border border-black/10" style={{ background: SURFACE, color: TEXT }} />
+                <input
+                  placeholder="Поиск по SKU..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && query.trim()) goToSku(query.trim()); }}
+                  className="pl-10 pr-3 py-2 w-full rounded-xl border border-black/10"
+                  style={{ background: SURFACE, color: TEXT }}
+                />
               </div>
-              <button onClick={() => query.trim() && goToSku(query.trim())} className="px-4 py-2 rounded-xl font-medium flex items-center gap-2" style={{ background: ACCENT, color: TEXT }}> Найти <ArrowUpRight size={16} /></button>
+              <button
+                onClick={() => query.trim() && goToSku(query.trim())}
+                className="px-4 py-2 rounded-xl font-medium flex items-center gap-2"
+                style={{ background: ACCENT, color: TEXT }}
+              >
+                Найти <ArrowUpRight size={16} />
+              </button>
             </div>
           </div>
         </div>
@@ -96,7 +118,14 @@ export default function DashboardBatches() {
               );
               return (
                 <div key={r.id} className="grid grid-cols-12 px-4 py-3 border-t border-black/10 items-center">
-                  <div className="col-span-3"><button onClick={() => alert(`Перейти к карточке SKU: ${r.sku}`)} className="underline hover:opacity-70 flex items-center gap-2"><Package size={16} /> {r.sku}</button></div>
+                  <div className="col-span-3">
+                    <button
+                      onClick={() => goToSku(r.sku)}
+                      className="underline hover:opacity-70 flex items-center gap-2"
+                    >
+                      <Package size={16} /> {r.sku}
+                    </button>
+                  </div>
                   <div className="col-span-2 opacity-80">{r.headProfile || '—'}</div>
                   <div className="col-span-2 opacity-80">{r.done}/{r.frames} ({p}%)</div>
                   <div className="col-span-3">
