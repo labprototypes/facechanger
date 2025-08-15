@@ -110,27 +110,40 @@ def process_sku(sku_id: int):
 @celery.task(name="worker.process_frame")
 def process_frame(frame_id: int):
     assert API_BASE_URL, "API_BASE_URL required for worker"
+
+    # 1) тянем описание кадра с API
     with httpx.Client(timeout=60) as c:
         r = c.get(f"{API_BASE_URL}/internal/frame/{frame_id}")
         r.raise_for_status()
         info = r.json()
 
+    # 2) определяем откуда брать исходник
     sku_code = info["sku"]["code"]
-    original_url = info["original_url"]
-    mask_key = f"masks/{sku_code}/{frame_id}.png"
 
-    # 1) маска (жёсткий край, +10% ширины)
+    original_url = info.get("original_url")
+    original_key = info.get("original_key")
+
+    if not original_url and original_key:
+        # private bucket? генерим presigned GET на 1 час
+        original_url = s3_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": original_key},
+            ExpiresIn=3600,
+        )
+
+    # 3) делаем маску (жесткий край, +10% ширины)
+    mask_key = f"masks/{sku_code}/{frame_id}.png"
     img = _download(original_url)
     mask = make_face_mask(img, expand_ratio=0.10)
     mask_png = _to_png_bytes(mask)
     put_mask_to_s3(mask_key, mask_png)
     mask_url = s3_url(mask_key)
 
-    # 2) промпт из профиля головы (Маша) или дефолт
+    # 4) собираем промпт (профиль головы "Маша" по умолчанию)
     token = info["head"]["trigger_token"] if info.get("head") else "tnkfwm1"
     prompt = (info["head"]["prompt_template"] if info.get("head") else "a photo of {token} female model").replace("{token}", token)
 
-    # 3) параметры генерации — по ТЗ
+    # 5) параметры генерации — по ТЗ
     input_dict = {
         "prompt": prompt,
         "prompt_strength": 0.8,
@@ -140,17 +153,21 @@ def process_frame(frame_id: int):
         "output_format": "png",
         "image": original_url,
         "mask": mask_url,
-        "frame_id": str(frame_id),  # вернётся во webhook payload.input
+        "frame_id": str(frame_id),
     }
 
-    # регистрируем поколение на API
+    # 6) регистрируем поколение на API (для трекинга)
     with httpx.Client(timeout=60) as c:
         reg = c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/generation", json={})
         reg.raise_for_status()
         gen_id = reg.json()["id"]
 
+    # 7) шлем в Replicate
     pred = replicate_predict(input_dict)
 
-    # фиксируем prediction_id на API
+    # 8) сохраняем prediction_id на API
     with httpx.Client(timeout=60) as c:
-        c.post(f"{API_BASE_URL}/internal/generation/{gen_id}/prediction", json={"prediction_id": pred["id"]})
+        c.post(
+            f"{API_BASE_URL}/internal/generation/{gen_id}/prediction",
+            json={"prediction_id": pred["id"]},
+        )
