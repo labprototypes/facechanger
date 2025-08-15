@@ -98,3 +98,22 @@ def submit_sku(sku_code: str, body: SubmitReq):
         queued = True
 
     return {"sku_id": sku_id, "frame_ids": frame_ids, "queued": queued}
+
+# --- Fallback загрузка через backend (multipart) ---
+from fastapi import UploadFile, File
+
+@router.post("/{sku_code}/upload")
+async def upload_via_api(sku_code: str, files: List[UploadFile] = File(...)):
+    cli = s3()
+    out = []
+    for f in files:
+        key = f"uploads/{sku_code}/{uuid.uuid4().hex}_{f.filename}"
+        # грузим поток прямо в S3
+        cli.upload_fileobj(
+            f.file,
+            S3_BUCKET,
+            key,
+            ExtraArgs={"ContentType": f.content_type or "application/octet-stream"},
+        )
+        out.append({"name": f.filename, "key": key})
+    return {"items": out}
