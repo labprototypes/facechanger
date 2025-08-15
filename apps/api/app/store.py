@@ -1,19 +1,23 @@
-from typing import Dict, List
+# apps/api/app/store.py
+from typing import Dict, List, Optional
 
-SKU_BY_CODE: Dict[str, int] = {}
-SKU_COUNTER = 100
-FRAME_COUNTER = 1
+# очень простой in-memory «псевдо-DB».
+# В реале мы сохраняем кадры сюда в момент загрузки (ручки upload-urls/upload).
+_FRAMES: Dict[str, Dict] = {}          # frame_id -> frame dict
+_BY_SKU: Dict[str, List[str]] = {}      # sku -> [frame_id, ...]
 
-FRAMES: Dict[int, dict] = {}           # frame_id -> frame dict
-SKU_FRAMES: Dict[int, List[int]] = {}  # sku_id -> [frame_ids]
-GENERATIONS: Dict[str, dict] = {}      # gen_id -> meta
+def add_frame(frame: Dict) -> None:
+    """
+    Используется ручкой загрузки: кладём кадр в хранилище.
+    Обязательные поля: id, sku, original_url
+    """
+    fid = frame["id"]
+    _FRAMES[fid] = frame
+    _BY_SKU.setdefault(frame["sku"], []).append(fid)
 
-def next_sku_id() -> int:
-    global SKU_COUNTER
-    SKU_COUNTER += 1
-    return SKU_COUNTER
+def list_frames_for_sku(sku: str) -> List[Dict]:
+    ids = _BY_SKU.get(sku, [])
+    return [ _FRAMES[i] for i in ids ]
 
-def next_frame_id() -> int:
-    global FRAME_COUNTER
-    FRAME_COUNTER += 1
-    return FRAME_COUNTER
+def get_frame(frame_id: str) -> Optional[Dict]:
+    return _FRAMES.get(frame_id)
