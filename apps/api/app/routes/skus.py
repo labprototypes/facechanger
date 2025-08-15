@@ -1,8 +1,100 @@
+import os, uuid
+from typing import List, Optional
+import boto3
 from fastapi import APIRouter
+from pydantic import BaseModel
+from ..store import (
+    SKU_BY_CODE, next_sku_id, next_frame_id,
+    FRAMES, SKU_FRAMES
+)
+from ..celery_client import queue_process_sku
 
 router = APIRouter(prefix="/skus", tags=["skus"])
 
-# Пример эндпоинта просмотра SKU (заглушка, позже подключим БД)
-@router.get("/{sku_code}")
-async def get_sku_card(sku_code: str):
-    return {"sku": sku_code, "status": "stub", "message": "SKU card placeholder"}
+S3_BUCKET = os.environ["S3_BUCKET"]
+S3_REGION = os.environ.get("S3_REGION")
+S3_ENDPOINT = os.environ.get("S3_ENDPOINT")
+AWS_KEY = os.environ.get("AWS_ACCESS_KEY_ID")
+AWS_SECRET = os.environ.get("AWS_SECRET_ACCESS_KEY")
+
+def s3():
+    return boto3.client(
+        "s3",
+        endpoint_url=S3_ENDPOINT or None,
+        region_name=S3_REGION or None,
+        aws_access_key_id=AWS_KEY or None,
+        aws_secret_access_key=AWS_SECRET or None,
+    )
+
+def public_url(key: str) -> str:
+    return f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
+
+class FileSpec(BaseModel):
+    name: str
+    type: Optional[str] = None
+    size: Optional[int] = None
+
+class UploadUrlsReq(BaseModel):
+    files: List[FileSpec]
+
+class SubmitItem(BaseModel):
+    key: str
+    name: Optional[str] = None
+
+class SubmitReq(BaseModel):
+    items: List[SubmitItem]
+    head_id: Optional[int] = 1   # по умолчанию "Маша"
+    enqueue: bool = True
+
+@router.post("/{sku_code}/upload-urls")
+def create_upload_urls(sku_code: str, body: UploadUrlsReq):
+    cli = s3()
+    out = []
+    for f in body.files:
+        key = f"uploads/{sku_code}/{uuid.uuid4().hex}_{f.name}"
+        put_url = cli.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": S3_BUCKET,
+                "Key": key,
+                "ContentType": f.type or "application/octet-stream",
+            },
+            ExpiresIn=3600,
+        )
+        out.append({"name": f.name, "key": key, "put_url": put_url, "public_url": public_url(key)})
+    return {"items": out}
+
+@router.post("/{sku_code}/submit")
+def submit_sku(sku_code: str, body: SubmitReq):
+    # 1) выдаём sku_id (создаём если нет)
+    if sku_code in SKU_BY_CODE:
+        sku_id = SKU_BY_CODE[sku_code]
+    else:
+        sku_id = next_sku_id()
+        SKU_BY_CODE[sku_code] = sku_id
+        SKU_FRAMES[sku_id] = []
+
+    # 2) регистрируем кадры с original_key (воркер сам сделает presigned GET)
+    frame_ids = []
+    for it in body.items:
+        fid = next_frame_id()
+        frame_ids.append(fid)
+        FRAMES[fid] = {
+            "id": fid,
+            "sku": {"code": sku_code, "id": sku_id},
+            "original_key": it.key,
+            # профиль головы (дефолт «Маша»)
+            "head": {
+                "trigger_token": "tnkfwm1",
+                "prompt_template": "a photo of {token} female model",
+            },
+        }
+        SKU_FRAMES[sku_id].append(fid)
+
+    # 3) опционально ставим в очередь
+    queued = False
+    if body.enqueue and frame_ids:
+        task = queue_process_sku(sku_id)
+        queued = True
+
+    return {"sku_id": sku_id, "frame_ids": frame_ids, "queued": queued}
