@@ -1,15 +1,14 @@
 import uuid
 from fastapi import APIRouter
+from ..celery_client import queue_process_sku, queue_process_frame
 
 router = APIRouter(tags=["internal"])
 
-# Простейшие in-memory заглушки (чтоб воркеру было что дергать)
-# frame -> минимальный набор, который воркер ждёт
+# --- простые in-memory заглушки для теста ---
 _FRAMES = {
     1: {
         "id": 1,
         "sku": {"code": "SKU-DEMO"},
-        # любой общедоступный URL для теста; заменим на S3 позже
         "original_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/59/Empty.png/640px-Empty.png",
         "head": {
             "trigger_token": "tnkfwm1",
@@ -17,7 +16,7 @@ _FRAMES = {
         },
     }
 }
-_SKU_FRAMES = {100: [1]}
+_SKU_FRAMES = {100: [1]}   # SKU=100 содержит frame 1
 _GENERATIONS = {}
 
 @router.get("/internal/sku/{sku_id}/frames")
@@ -39,3 +38,17 @@ async def create_generation(frame_id: int):
 async def attach_prediction(gen_id: str, payload: dict):
     _GENERATIONS.setdefault(gen_id, {}).update(payload)
     return {"ok": True}
+
+# --- НОВОЕ: постановка задач в очередь Celery ---
+
+@router.post("/internal/enqueue/sku/{sku_id}")
+async def enqueue_sku(sku_id: int):
+    # положить задачу на обработку всех кадров SKU
+    task = queue_process_sku(sku_id)
+    return {"queued": True, "task_id": task.id}
+
+@router.post("/internal/enqueue/frame/{frame_id}")
+async def enqueue_frame(frame_id: int):
+    # положить задачу на обработку одного кадра
+    task = queue_process_frame(frame_id)
+    return {"queued": True, "task_id": task.id}
