@@ -1,132 +1,139 @@
-import { useState } from "react";
-import { Images, Trash2, Upload } from "lucide-react";
-import { requestUploadUrls, putToSignedUrl, registerFrames, startProcess } from "../lib/api";
+// apps/web/pages/upload.tsx
+import React, { useMemo, useState } from "react";
 
-type FileItem = { id: string; file: File };
-type SkuGroup = { id: string; sku: string; files: FileItem[]; progress: number; status: string };
-
+const BG = "#f5f5f5";
+const TEXT = "#000000";
+const SURFACE = "#ffffff";
 const ACCENT = "#B8FF01";
 
-export default function UploadPage() {
-  const [groups, setGroups] = useState<SkuGroup[]>([
-    { id: crypto.randomUUID(), sku: "", files: [], progress: 0, status: "NEW" },
-  ]);
+// Публичный URL API (берём из переменной окружения Render)
+const API = process.env.NEXT_PUBLIC_API_BASE_URL as string;
 
-  const patch = (id: string, p: Partial<SkuGroup>) =>
-    setGroups((g) => g.map((x) => (x.id === id ? { ...x, ...p } : x)));
+type UploadUrl = { name: string; key: string; put_url: string; public_url: string };
 
-  const addGroup = () =>
-    setGroups((g) => [...g, { id: crypto.randomUUID(), sku: "", files: [], progress: 0, status: "NEW" }]);
+async function getUploadUrls(sku: string, files: File[]): Promise<UploadUrl[]> {
+  const res = await fetch(`${API}/api/skus/${encodeURIComponent(sku)}/upload-urls`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      files: files.map((f) => ({ name: f.name, type: f.type || "application/octet-stream", size: f.size })),
+    }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`upload-urls failed: ${res.status} ${t}`);
+  }
+  const json = await res.json();
+  return json.items as UploadUrl[];
+}
 
-  const rmGroup = (id: string) => setGroups((g) => g.filter((x) => x.id !== id));
+async function putToS3(file: File, putUrl: string) {
+  const r = await fetch(putUrl, {
+    method: "PUT",
+    headers: { "Content-Type": file.type || "application/octet-stream" }, // должен совпадать с тем, что передали на /upload-urls
+    body: file,
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error(`PUT ${file.name} failed: ${r.status} ${t}`);
+  }
+}
 
-  const onFiles = (g: SkuGroup, list: FileList | null) => {
-    if (!list) return;
-    const items: FileItem[] = Array.from(list).map((f) => ({ id: crypto.randomUUID(), file: f }));
-    patch(g.id, { files: [...g.files, ...items] });
+async function submitSku(sku: string, items: { key: string; name: string }[]) {
+  const res = await fetch(`${API}/api/skus/${encodeURIComponent(sku)}/submit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items, enqueue: true, head_id: 1 }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`submit failed: ${res.status} ${t}`);
+  }
+  return res.json();
+}
+
+export default function UploadBySkuPage() {
+  const [sku, setSku] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [stage, setStage] = useState<"idle" | "getting" | "uploading" | "submitting" | "done" | "error">("idle");
+  const [msg, setMsg] = useState<string>("");
+
+  const disabled = useMemo(() => !sku.trim() || files.length === 0 || stage === "getting" || stage === "uploading" || stage === "submitting", [sku, files, stage]);
+
+  const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const list = e.target.files ? Array.from(e.target.files) : [];
+    setFiles(list);
   };
 
-  const sendGroup = async (g: SkuGroup) => {
-    if (!g.sku || g.files.length === 0) return alert("Введите SKU и добавьте файлы");
+  const handleSend = async () => {
+    try {
+      setStage("getting");
+      setMsg("Запрашиваем upload URLs...");
+      const urls = await getUploadUrls(sku.trim(), files);
 
-    patch(g.id, { status: "UPLOADING", progress: 8 });
-    const files = g.files.map((f) => f.file);
+      setStage("uploading");
+      setMsg(`Загружаем в хранилище (${files.length})...`);
+      await Promise.all(files.map((f, i) => putToS3(f, urls[i].put_url)));
 
-    const { urls } = await requestUploadUrls(g.sku, files);
-    const map = new Map(urls.map((u) => [u.filename, u]));
+      setStage("submitting");
+      setMsg("Регистрируем кадры и ставим в очередь...");
+      const resp = await submitSku(sku.trim(), urls.map((u) => ({ key: u.key, name: u.name })));
 
-    let uploaded = 0;
-    for (const f of files) {
-      const u = map.get(f.name)!;
-      await putToSignedUrl(u.url, f);
-      uploaded++;
-      patch(g.id, { progress: 8 + Math.round((uploaded / files.length) * 60) });
+      setStage("done");
+      setMsg(`Готово: SKU_ID=${resp.sku_id}, кадров=${resp.frame_ids.length}, очередь=${resp.queued ? "да" : "нет"}`);
+    } catch (e: any) {
+      console.error(e);
+      setStage("error");
+      setMsg(e?.message || "Ошибка");
     }
-
-    await registerFrames(g.sku, files.map((f) => ({ filename: f.name, key: map.get(f.name)!.key })));
-    patch(g.id, { status: "GENERATING", progress: 75 });
-
-    await startProcess(g.sku);
-    patch(g.id, { status: "REVIEW", progress: 95 });
-
-    patch(g.id, { status: "DONE", progress: 100 });
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Загрузка по SKU</h1>
-        <div className="flex items-center gap-2">
-          <button className="px-4 py-2 rounded-xl font-medium bg-white" onClick={addGroup}>
-            Добавить SKU
-          </button>
-          <button
-            className="px-4 py-2 rounded-xl font-medium flex items-center gap-2"
-            style={{ background: ACCENT, color: "#000" }}
-            onClick={async () => {
-              for (const g of groups) {
-                if (!g.sku || g.files.length === 0) continue;
-                try { await sendGroup(g); } catch (e: any) { alert(e.message || String(e)); }
-              }
-            }}
-          >
-            <Images size={18} /> Отправить все в работу
-          </button>
-        </div>
-      </div>
+    <div className="min-h-screen" style={{ background: BG, color: TEXT }}>
+      <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-10">
+        <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">Загрузка по SKU</h1>
+        <p className="opacity-80 mt-1">Введи номер SKU, выбери файлы и отправь в работу — мы загрузим в S3, зарегистрируем кадры и поставим задачи воркеру.</p>
 
-      <div className="grid gap-4">
-        {groups.map((g) => (
-          <div key={g.id} className="rounded-2xl p-5 shadow-sm border" style={{ background: "#fff", borderColor: "#0000001a" }}>
-            <div className="flex items-center justify-between gap-3 mb-4">
-              <div className="flex items-center gap-3">
-                <input
-                  className="px-3 py-2 rounded-xl border w-48"
-                  placeholder="SKU"
-                  value={g.sku}
-                  onChange={(e) => patch(g.id, { sku: e.target.value })}
-                />
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="file" multiple className="hidden" onChange={(e) => onFiles(g, e.target.files)} />
-                  <div className="px-3 py-2 rounded-xl border bg-white flex items-center gap-2">
-                    <Upload size={16} /> Добавить файлы
-                  </div>
-                </label>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  className="px-3 py-2 rounded-xl font-medium"
-                  style={{ background: ACCENT, color: "#000" }}
-                  onClick={() => sendGroup(g)}
-                >
-                  Отправить в работу
-                </button>
-                <button className="px-3 py-2 rounded-xl bg-white" onClick={() => rmGroup(g.id)}>
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            </div>
-
-            {g.files.length > 0 && (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {g.files.map((f) => (
-                  <div key={f.id} className="aspect-square rounded-xl border bg-white flex items-center justify-center text-xs">
-                    {f.file.name}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="mt-4">
-              <div className="text-xs opacity-70 mb-1">
-                Статус: {g.status} • Прогресс: {g.progress}%
-              </div>
-              <div className="h-2 w-full rounded-full bg-black/10 overflow-hidden">
-                <div className="h-full" style={{ width: `${g.progress}%`, background: ACCENT }} />
-              </div>
-            </div>
+        <div className="mt-6 grid gap-4">
+          <div>
+            <label className="text-sm opacity-80">SKU</label>
+            <input
+              value={sku}
+              onChange={(e) => setSku(e.target.value.toUpperCase())}
+              placeholder="Например: SKU-TEST-001"
+              className="mt-1 w-full px-3 py-2 rounded-xl border border-black/10"
+              style={{ background: SURFACE, color: TEXT }}
+            />
           </div>
-        ))}
+
+          <div>
+            <label className="text-sm opacity-80">Файлы</label>
+            <input
+              type="file"
+              multiple
+              onChange={onPick}
+              className="mt-1 w-full px-3 py-2 rounded-xl border border-black/10"
+              style={{ background: SURFACE, color: TEXT }}
+            />
+            {files.length > 0 && (
+              <div className="mt-2 text-sm opacity-80">Выбрано: {files.length}</div>
+            )}
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              disabled={disabled}
+              onClick={handleSend}
+              className={`px-4 py-2 rounded-xl font-medium ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
+              style={{ background: ACCENT, color: TEXT }}
+            >
+              Отправить в работу
+            </button>
+            {stage !== "idle" && (
+              <span className="text-sm opacity-80">{msg}</span>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
