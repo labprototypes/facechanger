@@ -1,12 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-# роутеры
 from .routes.skus import router as skus_router
 from .routes.heads import router as heads_router
 from .routes.internal import router as internal_router
 
-app = FastAPI(title="facechanger-api")
+app = FastAPI()
 
 # CORS можно сузить позже
 app.add_middleware(
