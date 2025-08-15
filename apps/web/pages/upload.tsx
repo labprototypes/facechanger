@@ -6,20 +6,68 @@ const TEXT = "#000000";
 const SURFACE = "#ffffff";
 const ACCENT = "#B8FF01";
 
-// Публичный URL API (берём из переменной окружения Render)
+// Публичный URL API (из переменной окружения Render)
 const API = process.env.NEXT_PUBLIC_API_BASE_URL as string;
 
 type UploadUrl = { name: string; key: string; put_url: string; public_url: string };
+type Stage = "idle" | "getting" | "uploading" | "submitting" | "done" | "error";
 
+/** шаг 1: запрос presigned PUT-URL'ов на backend */
+async function getUploadUrls(sku: string, files: File[]): Promise<UploadUrl[]> {
+  const res = await fetch(`${API}/api/skus/${encodeURIComponent(sku)}/upload-urls`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      files: files.map((f) => ({
+        name: f.name,
+        type: f.type || "application/octet-stream",
+        size: f.size,
+      })),
+    }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`upload-urls failed: ${res.status} ${t}`);
+  }
+  const json = await res.json();
+  return json.items as UploadUrl[];
+}
+
+/** шаг 2: сам PUT в S3 по выданному URL */
+async function putToS3(file: File, putUrl: string) {
+  const r = await fetch(putUrl, {
+    method: "PUT",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error(`PUT ${file.name} failed: ${r.status} ${t}`);
+  }
+}
+
+/** шаг 3: регистрация кадров + постановка в очередь воркеру */
+async function submitSku(sku: string, items: { key: string; name: string }[]) {
+  const res = await fetch(`${API}/api/skus/${encodeURIComponent(sku)}/submit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items, enqueue: true, head_id: 1 }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`submit failed: ${res.status} ${t}`);
+  }
+  return res.json();
+}
+
+/** fallback: если PUT в S3 упал по CORS/региону — грузим файлы через backend (multipart) */
 async function uploadWithFallback(sku: string, files: File[]) {
   try {
-    // основной путь: presigned PUT
     const urls = await getUploadUrls(sku, files);
     await Promise.all(files.map((f, i) => putToS3(f, urls[i].put_url)));
-    return urls.map(u => ({ key: u.key, name: u.name }));
+    return urls.map((u) => ({ key: u.key, name: u.name }));
   } catch (e) {
     console.warn("Presigned PUT failed, fallback to backend upload", e);
-    // запасной путь: multipart на backend
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f, f.name));
     const res = await fetch(`${API}/api/skus/${encodeURIComponent(sku)}/upload`, {
@@ -35,45 +83,21 @@ async function uploadWithFallback(sku: string, files: File[]) {
   }
 }
 
-async function handleSend(sku: string, files: File[]) {
-  try {
-    setStage("getting");
-    setMsg("Загружаем файлы...");
-    const items = await uploadWithFallback(sku, files);
-
-    setStage("submitting");
-    setMsg("Регистрируем кадры и ставим в очередь...");
-    const resp = await submitSku(sku.trim(), items);
-
-    setStage("done");
-    setMsg(`Готово: SKU_ID=${resp.sku_id}, кадров=${resp.frame_ids.length}, очередь=${resp.queued ? "да" : "нет"}`);
-  } catch (e: any) {
-    console.error(e);
-    setStage("error");
-    setMsg(e?.message || "Ошибка");
-  }
-}
-
-async function submitSku(sku: string, items: { key: string; name: string }[]) {
-  const res = await fetch(`${API}/api/skus/${encodeURIComponent(sku)}/submit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ items, enqueue: true, head_id: 1 }),
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`submit failed: ${res.status} ${t}`);
-  }
-  return res.json();
-}
-
 export default function UploadBySkuPage() {
   const [sku, setSku] = useState("");
   const [files, setFiles] = useState<File[]>([]);
-  const [stage, setStage] = useState<"idle" | "getting" | "uploading" | "submitting" | "done" | "error">("idle");
+  const [stage, setStage] = useState<Stage>("idle");
   const [msg, setMsg] = useState<string>("");
 
-  const disabled = useMemo(() => !sku.trim() || files.length === 0 || stage === "getting" || stage === "uploading" || stage === "submitting", [sku, files, stage]);
+  const disabled = useMemo(
+    () =>
+      !sku.trim() ||
+      files.length === 0 ||
+      stage === "getting" ||
+      stage === "uploading" ||
+      stage === "submitting",
+    [sku, files, stage]
+  );
 
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const list = e.target.files ? Array.from(e.target.files) : [];
@@ -83,19 +107,19 @@ export default function UploadBySkuPage() {
   const handleSend = async () => {
     try {
       setStage("getting");
-      setMsg("Запрашиваем upload URLs...");
-      const urls = await getUploadUrls(sku.trim(), files);
-
-      setStage("uploading");
-      setMsg(`Загружаем в хранилище (${files.length})...`);
-      await Promise.all(files.map((f, i) => putToS3(f, urls[i].put_url)));
+      setMsg("Загружаем файлы...");
+      const items = await uploadWithFallback(sku.trim(), files);
 
       setStage("submitting");
       setMsg("Регистрируем кадры и ставим в очередь...");
-      const resp = await submitSku(sku.trim(), urls.map((u) => ({ key: u.key, name: u.name })));
+      const resp = await submitSku(sku.trim(), items);
 
       setStage("done");
-      setMsg(`Готово: SKU_ID=${resp.sku_id}, кадров=${resp.frame_ids.length}, очередь=${resp.queued ? "да" : "нет"}`);
+      setMsg(
+        `Готово: SKU_ID=${resp.sku_id}, кадров=${resp.frame_ids.length}, очередь=${
+          resp.queued ? "да" : "нет"
+        }`
+      );
     } catch (e: any) {
       console.error(e);
       setStage("error");
@@ -107,7 +131,10 @@ export default function UploadBySkuPage() {
     <div className="min-h-screen" style={{ background: BG, color: TEXT }}>
       <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-10">
         <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">Загрузка по SKU</h1>
-        <p className="opacity-80 mt-1">Введи номер SKU, выбери файлы и отправь в работу — мы загрузим в S3, зарегистрируем кадры и поставим задачи воркеру.</p>
+        <p className="opacity-80 mt-1">
+          Введи номер SKU, выбери файлы и отправь в работу — мы загрузим в S3,
+          зарегистрируем кадры и поставим задачи воркеру.
+        </p>
 
         <div className="mt-6 grid gap-4">
           <div>
@@ -139,14 +166,14 @@ export default function UploadBySkuPage() {
             <button
               disabled={disabled}
               onClick={handleSend}
-              className={`px-4 py-2 rounded-xl font-medium ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
+              className={`px-4 py-2 rounded-xl font-medium ${
+                disabled ? "opacity-50 cursor-not-allowed" : ""
+              }`}
               style={{ background: ACCENT, color: TEXT }}
             >
               Отправить в работу
             </button>
-            {stage !== "idle" && (
-              <span className="text-sm opacity-80">{msg}</span>
-            )}
+            {stage !== "idle" && <span className="text-sm opacity-80">{msg}</span>}
           </div>
         </div>
       </div>
