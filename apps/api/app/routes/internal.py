@@ -1,25 +1,43 @@
-import uuid
-from fastapi import APIRouter
-from ..store import FRAMES, SKU_FRAMES, GENERATIONS
+# apps/api/app/routes/internal.py
+from fastapi import APIRouter, HTTPException
+from typing import List, Dict, Any, Optional
+
+# мы читаем из простого in-memory стора
+# (см. пункт 2: там есть EXACT такие функции/структуры)
+from ..store import list_frames_for_sku, get_frame
 
 router = APIRouter(tags=["internal"])
 
-@router.get("/internal/sku/{sku_id}/frames")
-async def list_frames_for_sku(sku_id: int):
-    ids = SKU_FRAMES.get(sku_id, [])
-    return {"frames": [FRAMES[i] for i in ids]}
+@router.get("/internal/sku/{sku}/frames")
+async def internal_frames_for_sku(sku: str) -> Dict[str, Any]:
+    """
+    Возвращает список кадров по SKU в формате,
+    который ждёт воркер: {"frames": [{"id": "..."}]}
+    """
+    frames = list_frames_for_sku(sku)
+    return {"frames": [{"id": f["id"]} for f in frames]}
 
 @router.get("/internal/frame/{frame_id}")
-async def get_frame(frame_id: int):
-    return FRAMES[frame_id]
+async def internal_frame_info(frame_id: str) -> Dict[str, Any]:
+    """
+    Возвращает все поля, которые нужны воркеру для обработки одного кадра.
+    """
+    fr = get_frame(frame_id)
+    if not fr:
+        raise HTTPException(status_code=404, detail="frame not found")
 
-@router.post("/internal/frame/{frame_id}/generation")
-async def create_generation(frame_id: int):
-    gen_id = str(uuid.uuid4())
-    GENERATIONS[gen_id] = {"frame_id": frame_id}
-    return {"id": gen_id}
-
-@router.post("/internal/generation/{gen_id}/prediction")
-async def attach_prediction(gen_id: str, payload: dict):
-    GENERATIONS.setdefault(gen_id, {}).update(payload)
-    return {"ok": True}
+    # ожидаемый воркером shape
+    return {
+        "id": fr["id"],
+        "sku": {"code": fr["sku"]},
+        # «голова»: по умолчанию токен Маши tnkfwm1 + дефолтный промпт
+        "head": {
+            "trigger_token": fr.get("head_token", "tnkfwm1"),
+            "prompt_template": fr.get("prompt_template", "a photo of {token} female model"),
+        },
+        "original_url": fr["original_url"],
+        # если маску заранее сохранили — отдаём, иначе None
+        "mask_url": fr.get("mask_url"),
+        # любые доп. параметры (опционально)
+        "params": fr.get("params", {}),
+    }
