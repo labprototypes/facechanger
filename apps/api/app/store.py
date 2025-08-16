@@ -13,6 +13,7 @@ SKU_BY_CODE: Dict[str, Dict[str, Any]] = {}           # code -> sku
 SKUS_BY_ID: Dict[str, Dict[str, Any]] = {}            # id -> sku
 FRAMES_BY_ID: Dict[str, Dict[str, Any]] = {}          # id -> frame
 FRAME_BY_ID = FRAMES_BY_ID                             # алиас на всякий
+FRAMES = FRAMES_BY_ID  # старое имя, которое ждут роуты
 
 # Счётчики для id (на время разработки)
 _sku_counter = count(1)
@@ -117,11 +118,12 @@ mark_frame_status = set_frame_status
 
 __all__ = [
     # сторы
-    "SKU_BY_CODE", "SKUS_BY_ID", "FRAMES_BY_ID", "FRAME_BY_ID",
+    "SKU_BY_CODE", "SKUS_BY_ID", "FRAMES_BY_ID", "FRAME_BY_ID", "FRAMES",
     # генераторы id
     "next_sku_id", "next_frame_id",
     # SKU API
     "get_sku", "upsert_sku", "register_sku",
     # Frames API
-    "add_frame", "register_frame", "get_frame", "list_frames", "set_frame_status", "mark_frame_status",
+    "add_frame", "register_frame", "get_frame", "list_frames",
+    "set_frame_status", "mark_frame_status",
 ]
