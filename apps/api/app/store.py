@@ -18,7 +18,7 @@ FRAME_BY_ID = FRAMES_BY_ID                        # алиас, на всяки�
 # алиас, который ожидают некоторые модули
 FRAMES = FRAMES_BY_ID
 
-# карта, которую импортирует routes/skus.py:
+# карта, которую импортируют роуты:
 # sku_code -> список frame_id (сохраняем порядок добавления)
 SKU_FRAMES: Dict[str, List[str]] = {}
 
@@ -119,6 +119,10 @@ def list_frames(sku_code: str) -> List[Dict[str, Any]]:
     # fallback (на всякий)
     return [f for f in FRAMES_BY_ID.values() if f.get("sku") == sku_code]
 
+# ---- Алиас под старый импорт из routes/internal.py ----
+def list_frames_for_sku(sku_code: str) -> List[Dict[str, Any]]:
+    return list_frames(sku_code)
+
 def set_frame_status(frame_id: str, status: str, **extra: Any) -> Optional[Dict[str, Any]]:
     with _lock:
         fr = FRAMES_BY_ID.get(frame_id)
@@ -142,6 +146,6 @@ __all__ = [
     # SKU API
     "get_sku", "upsert_sku", "register_sku",
     # Frames API
-    "add_frame", "register_frame", "get_frame", "list_frames",
+    "add_frame", "register_frame", "get_frame", "list_frames", "list_frames_for_sku",
     "set_frame_status", "mark_frame_status",
 ]
