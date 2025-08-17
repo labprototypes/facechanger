@@ -7,6 +7,7 @@ from typing import List, Optional, Dict, Any
 import time
 from pydantic import BaseModel
 from fastapi import HTTPException
+import uuid
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -80,13 +81,14 @@ def internal_frame_info(frame_id: str):
 
 @router.post("/frame/{frame_id}/generation")
 def register_frame_generation(frame_id: str, body: GenerationIn):
-    # получаем кадр
     fr = FRAMES.get(frame_id)
     if not fr:
         raise HTTPException(status_code=404, detail="frame not found")
 
-    # событие генерации (логируем статусы, ключи, мету)
+    # событие генерации
+    gen_id = f"gen_{uuid.uuid4().hex[:8]}"
     event = {
+        "id": gen_id,
         "ts": time.time(),
         "status": body.status or "QUEUED",
         "meta": body.meta or {},
@@ -94,15 +96,14 @@ def register_frame_generation(frame_id: str, body: GenerationIn):
     if body.error:
         event["error"] = body.error
 
-    # сохраняем историю генераций
     gens = fr.setdefault("generations", [])
     gens.append(event)
 
-    # обновляем краткое состояние кадра
+    # краткое состояние кадра
     if body.status:
         fr["status"] = body.status
 
-    # если уже есть готовые артефакты — прикрепим ссылки
+    # прикрепим результаты, если пришли ключи
     if body.output_keys:
         fr["outputs"] = [
             {
@@ -113,7 +114,9 @@ def register_frame_generation(frame_id: str, body: GenerationIn):
             for k in body.output_keys
         ]
 
+    # вернём id, который ждёт воркер
     return {
+        "id": gen_id,
         "ok": True,
         "frame_id": frame_id,
         "status": fr.get("status", "IN_PROGRESS"),
