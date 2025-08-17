@@ -85,14 +85,38 @@ def parse_version_from_model(model: str) -> tuple[str, str]:
         m, v = model, ""
     return m, v
 
-def replicate_predict(input_dict: dict):
-    model, version = parse_version_from_model(REPLICATE_MODEL)
-    payload = {"version": version, "input": input_dict}
-    headers = {"Authorization": f"Token {REPLICATE_TOKEN}", "Content-Type": "application/json"}
-    with httpx.Client(timeout=120) as c:
-        r = c.post("https://api.replicate.com/v1/predictions", json=payload, headers=headers)
-        r.raise_for_status()
-        return r.json()
+# --- REPLACE WHOLE FUNCTION replicate_predict ---
+def replicate_predict(input_dict: dict) -> dict:
+    import os, httpx, json
+
+    api_token = os.environ["REPLICATE_API_TOKEN"]          # обязательно в Render env
+    model_version = os.environ["REPLICATE_MODEL_VERSION"]  # обязателен: версия модели tnKFWM2
+
+    payload = {
+        "version": model_version,  # без этого Replicate часто отвечает 422
+        "input": input_dict,
+    }
+    headers = {
+        "Authorization": f"Token {api_token}",  # именно Token, не Bearer и не X-Replicate-Api-Token
+        "Content-Type": "application/json",
+    }
+
+    r = httpx.post(
+        "https://api.replicate.com/v1/predictions",
+        headers=headers,
+        json=payload,
+        timeout=60,
+    )
+
+    if r.status_code >= 400:
+        # вернём понятную ошибку в логи
+        try:
+            err = r.json()
+        except Exception:
+            err = {"raw": r.text}
+        raise RuntimeError(f"Replicate API error {r.status_code}: {err}")
+
+    return r.json()
 
 # --- Tasks ---
 @celery.task(name="worker.process_sku")
@@ -142,6 +166,7 @@ def process_frame(frame_id: int):
     # 4) собираем промпт (профиль головы "Маша" по умолчанию)
     token = info["head"]["trigger_token"] if info.get("head") else "tnkfwm1"
     prompt = (info["head"]["prompt_template"] if info.get("head") else "a photo of {token} female model").replace("{token}", token)
+    source_image_url = fr["original_url"]
 
     # 5) параметры генерации — по ТЗ
     input_dict = {
@@ -164,6 +189,7 @@ def process_frame(frame_id: int):
 
     # 7) шлем в Replicate
     pred = replicate_predict(input_dict)
+    gen_id = pred["id"]
 
     # 8) сохраняем prediction_id на API
     with httpx.Client(timeout=60) as c:
