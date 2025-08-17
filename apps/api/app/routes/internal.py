@@ -3,6 +3,10 @@ import os
 import boto3
 from fastapi import APIRouter, HTTPException
 from ..store import FRAMES, SKU_FRAMES
+from typing import List, Optional, Dict, Any
+import time
+from pydantic import BaseModel
+from fastapi import HTTPException
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -12,6 +16,11 @@ S3_ENDPOINT = os.environ.get("S3_ENDPOINT")
 AWS_KEY = os.environ.get("AWS_ACCESS_KEY_ID")
 AWS_SECRET = os.environ.get("AWS_SECRET_ACCESS_KEY")
 
+class GenerationIn(BaseModel):
+    status: Optional[str] = None        # "QUEUED" | "RUNNING" | "DONE" | "FAILED"
+    output_keys: Optional[List[str]] = None  # список s3-ключей с результатами (если уже есть)
+    meta: Optional[Dict[str, Any]] = None    # любые доп. поля от воркера
+    error: Optional[str] = None              # текст ошибки, если упало
 
 def s3():
     return boto3.client(
@@ -67,4 +76,46 @@ def internal_frame_info(frame_id: str):
         "original_url": presigned_get_url(key),  # нужно воркеру
         "public_url": public_url(key),
         "head": fr.get("head"),
+    }
+
+@router.post("/frame/{frame_id}/generation")
+def register_frame_generation(frame_id: str, body: GenerationIn):
+    # получаем кадр
+    fr = FRAMES.get(frame_id)
+    if not fr:
+        raise HTTPException(status_code=404, detail="frame not found")
+
+    # событие генерации (логируем статусы, ключи, мету)
+    event = {
+        "ts": time.time(),
+        "status": body.status or "QUEUED",
+        "meta": body.meta or {},
+    }
+    if body.error:
+        event["error"] = body.error
+
+    # сохраняем историю генераций
+    gens = fr.setdefault("generations", [])
+    gens.append(event)
+
+    # обновляем краткое состояние кадра
+    if body.status:
+        fr["status"] = body.status
+
+    # если уже есть готовые артефакты — прикрепим ссылки
+    if body.output_keys:
+        fr["outputs"] = [
+            {
+                "key": k,
+                "public_url": public_url(k),
+                "signed_url": presigned_get_url(k),
+            }
+            for k in body.output_keys
+        ]
+
+    return {
+        "ok": True,
+        "frame_id": frame_id,
+        "status": fr.get("status", "IN_PROGRESS"),
+        "outputs": fr.get("outputs", []),
     }
