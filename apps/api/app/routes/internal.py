@@ -177,6 +177,13 @@ def internal_health():
     """
     return {"ok": True}
 
+@router.get("/internal/s3/presign-get")
+def presign_get_url(key: str):
+    """
+    Возвращает presigned GET url для S3 key.
+    """
+    url = s3util.get_presigned_get_url(key)
+    return {"url": url}
 
 @router.get("/sku/{sku_id}/frames")
 def internal_sku_frames(sku_id: str):
