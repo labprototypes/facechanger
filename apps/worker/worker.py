@@ -19,9 +19,10 @@ S3_ENDPOINT = os.environ.get("S3_ENDPOINT")
 AWS_KEY = os.environ.get("AWS_ACCESS_KEY_ID")
 AWS_SECRET = os.environ.get("AWS_SECRET_ACCESS_KEY")
 
-API_BASE_URL = os.environ.get("API_BASE_URL")  # например: https://api-backend-xxx.onrender.com
-REPLICATE_TOKEN = os.environ["REPLICATE_API_TOKEN"]          # Token ****
-REPLICATE_MODEL_VERSION = os.environ["REPLICATE_MODEL_VERSION"]  # версия tnKFWM2
+API_BASE_URL = os.environ.get("API_BASE_URL")  # базовый URL бэка
+REPLICATE_TOKEN = os.environ.get("REPLICATE_API_TOKEN")            # Token ****
+REPLICATE_MODEL_VERSION = os.environ.get("REPLICATE_MODEL_VERSION")  # версия tnKFWM2 (желательно задать)
+REPLICATE_MODEL = os.environ.get("REPLICATE_MODEL")                  # fallback: owner/model (например labprototypes/tnkfwm2)
 
 # --- Celery app ---
 celery = Celery("worker", broker=REDIS_URL, backend=REDIS_URL)
@@ -99,21 +100,31 @@ def put_mask_to_s3(key: str, mask_png: bytes):
     return s3_url(key)
 
 # --- Replicate ---
-def replicate_predict(input_dict: Dict[str, Any]) -> Dict[str, Any]:
+def replicate_predict(input_dict: dict) -> dict:
+    import httpx, json
+
+    if not REPLICATE_TOKEN:
+        raise RuntimeError("REPLICATE_API_TOKEN is not set")
+
     headers = {
         "Authorization": f"Token {REPLICATE_TOKEN}",  # именно Token
         "Content-Type": "application/json",
     }
-    payload = {
-        "version": REPLICATE_MODEL_VERSION,  # фиксируем версию tnKFWM2
-        "input": input_dict,
-    }
-    r = httpx.post(
-        "https://api.replicate.com/v1/predictions",
-        headers=headers,
-        json=payload,
-        timeout=120,
-    )
+
+    # Если есть конкретная версия — используем универсальный endpoint
+    if REPLICATE_MODEL_VERSION:
+        url = "https://api.replicate.com/v1/predictions"
+        payload = {"version": REPLICATE_MODEL_VERSION, "input": input_dict}
+
+    # Иначе, если задали только модель (owner/name) — используем модельный endpoint
+    elif REPLICATE_MODEL:
+        url = f"https://api.replicate.com/v1/models/{REPLICATE_MODEL}/predictions"
+        payload = {"input": input_dict}
+
+    else:
+        raise RuntimeError("Set REPLICATE_MODEL_VERSION or REPLICATE_MODEL in environment")
+
+    r = httpx.post(url, headers=headers, json=payload, timeout=120)
     if r.status_code >= 400:
         try:
             detail = r.json()
