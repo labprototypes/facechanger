@@ -43,6 +43,16 @@ def s3_client():
         aws_secret_access_key=AWS_SECRET or None,
     )
 
+# --- S3: upload mask helper ---
+def put_mask_to_s3(key: str, data: bytes) -> str:
+    # Загружаем PNG байты в S3 и возвращаем публичный URL (для presign уже ниже)
+    s3_client().put_object(
+        Bucket=S3_BUCKET,
+        Key=key,
+        Body=data,
+        ContentType="image/png",
+    )
+    return f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
 
 def s3_public_url(key: str) -> str:
     # Универсальная публичная форма (как в бэке)
@@ -381,12 +391,12 @@ def process_frame(frame_id: int):
         "num_inference_steps": 28,        # если используешь dev-версию модели
         "guidance_scale": 3,
         "output_format": "png",
-        "image": source_image_url,   # <-- теперь Replicate видит картинку
+        "image": source_image_url,  # <-- теперь Replicate видит картинку
         "mask": mask_url,    # ← теперь presigned
         # при необходимости остальные поля (replicate_weights и т.п.)
     }
 
-    pred = replicate_create_prediction(inp)
+    pred = replicate_create_prediction(input_dict)
     pred_id = pred.get("id")
     pred_get = (pred.get("urls") or {}).get("get")
     if not pred_id or not pred_get:
