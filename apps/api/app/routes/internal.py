@@ -65,11 +65,30 @@ def _frame_view(fr: Dict[str, Any]) -> Dict[str, Any]:
         out["mask_url"] = _public_url(out["mask_key"])
     return out
 
+from fastapi import HTTPException  # убедись, что импорт есть сверху файла
+
+def _sku_to_int(sku_id_any) -> int:
+    """
+    Принимает 1, "1" или "sku_1" и возвращает 1.
+    Иначе бросает 422.
+    """
+    # уже int
+    if isinstance(sku_id_any, int):
+        return sku_id_any
+    # строка вида "sku_1" или "1"
+    s = str(sku_id_any)
+    if s.startswith("sku_"):
+        s = s.split("_", 1)[1]
+    if s.isdigit():
+        return int(s)
+    raise HTTPException(status_code=422, detail="Invalid sku id format")
+
 @router.get("/sku/{sku_id}/frames")
-def internal_frames_for_sku(sku_id: int):
-    fids = SKU_FRAMES.get(sku_id, [])
-    frames = [_frame_view(FRAMES[fid]) for fid in fids if fid in FRAMES]
-    return {"frames": frames}
+def internal_sku_frames(sku_id: str):  # <-- принимаем str
+    sid = _sku_to_int(sku_id)          # <-- приводим к int
+    frames = list_frames_for_sku(sid)
+    # воркеру нужен хотя бы id; остальное можете расширить по желанию
+    return {"frames": [{"id": f["id"]} for f in frames]}
 
 @router.get("/frame/{frame_id}")
 def internal_frame_info(frame_id: int):
