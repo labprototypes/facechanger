@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { fetchSkuViewByCode as fetchSkuView, redoFrame } from "@/lib/api";
+import { fetchSkuViewByCode as fetchSkuView, redoFrame } from "../../lib/api";
 
 const BG = "#f2f2f2"; const TEXT = "#000000"; const SURFACE = "#ffffff"; const ACCENT = "#B8FF01";
 const { sku } = router.query as { sku: string };
