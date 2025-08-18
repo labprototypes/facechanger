@@ -142,6 +142,17 @@ def set_frame_status(frame_id: int, status: str) -> None:
             fr["status"] = status
             fr["updated_at"] = _now()
 
+def set_frame_outputs(frame_id: int, outputs: List[str]) -> None:
+    """Attach outputs (list of S3 keys) to a frame record.
+    This lets UI endpoints that only look at frame objects expose generation results
+    without separately traversing GENERATIONS state.
+    """
+    with _lock:
+        fr = FRAMES_BY_ID.get(int(frame_id))
+        if fr is not None:
+            fr["outputs"] = list(outputs)
+            fr["updated_at"] = _now()
+
 # backward name used earlier
 mark_frame_status = set_frame_status
 

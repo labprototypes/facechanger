@@ -38,6 +38,7 @@ from ..store import (
     save_generation_prediction,  # (generation_id: int, prediction_id: str) -> None
     generations_for_frame,       # (frame_id: int) -> List[dict]
     set_generation_outputs,      # (generation_id: int, outputs: List[str]) -> None
+    set_frame_outputs,            # (frame_id: int, outputs: List[str]) -> None
 )
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -307,6 +308,17 @@ def internal_generation_complete(generation_id: int, body: _GenerationCompleteBo
             norm.append(o)
     try:
         set_generation_outputs(int(generation_id), norm)
+        # Продублируем на сам frame (удобно для простого UI /internal/sku/.../view)
+        # Находим frame_id через GENERATIONS_BY_ID, но чтобы не тянуть его тут напрямую
+        # воспользуемся generations_for_frame обходом: найдём generation и возьмём frame_id
+        from ..store import GENERATIONS_BY_ID  # локальный импорт чтобы избежать циклов
+        gen_rec = GENERATIONS_BY_ID.get(int(generation_id)) or {}
+        frame_id = gen_rec.get("frame_id")
+        if frame_id is not None:
+            try:
+                set_frame_outputs(int(frame_id), norm)
+            except Exception:
+                pass
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed to set outputs: {e}")
     return {"ok": True, "count": len(norm)}
