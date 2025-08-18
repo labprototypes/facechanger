@@ -1,8 +1,7 @@
+# apps/worker/worker.py
 import os
 import io
 import uuid
-from typing import Dict, Any, List
-
 from celery import Celery
 import httpx
 import numpy as np
@@ -19,10 +18,10 @@ S3_ENDPOINT = os.environ.get("S3_ENDPOINT")
 AWS_KEY = os.environ.get("AWS_ACCESS_KEY_ID")
 AWS_SECRET = os.environ.get("AWS_SECRET_ACCESS_KEY")
 
-API_BASE_URL = os.environ.get("API_BASE_URL")  # базовый URL бэка
-REPLICATE_TOKEN = os.environ.get("REPLICATE_API_TOKEN")            # Token ****
-REPLICATE_MODEL_VERSION = os.environ.get("REPLICATE_MODEL_VERSION")  # версия tnKFWM2 (желательно задать)
-REPLICATE_MODEL = os.environ.get("REPLICATE_MODEL")                  # fallback: owner/model (например labprototypes/tnkfwm2)
+API_BASE_URL = os.environ.get("API_BASE_URL")  # база для /internal ручек бэка
+
+REPLICATE_API_TOKEN = os.environ["REPLICATE_API_TOKEN"]
+REPLICATE_MODEL_VERSION = os.environ["REPLICATE_MODEL_VERSION"]  # строго owner/model:version или UUID версии
 
 # --- Celery app ---
 celery = Celery("worker", broker=REDIS_URL, backend=REDIS_URL)
@@ -37,20 +36,30 @@ def s3_client():
         aws_secret_access_key=AWS_SECRET or None,
     )
 
-def s3_url(key: str) -> str:
-    # публичный URL стандартного endpoint
-    return f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
+def s3_presigned_get(key: str, expires: int = 3600) -> str:
+    """Безопасная ссылка на приватный объект — то, что надо отдавать в Replicate/UI."""
+    return s3_client().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": S3_BUCKET, "Key": key},
+        ExpiresIn=expires,
+    )
+
+def put_bytes(key: str, data: bytes, content_type: str):
+    # Объект остаётся приватным (ACL не трогаем) — будем раздавать presigned GET.
+    s3_client().put_object(
+        Bucket=S3_BUCKET,
+        Key=key,
+        Body=data,
+        ContentType=content_type,
+    )
 
 # --- IO helpers ---
 def _download(url: str) -> np.ndarray:
     with httpx.Client(timeout=60) as c:
         r = c.get(url)
         r.raise_for_status()
-        img_arr = np.frombuffer(r.content, dtype=np.uint8)
-        img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise RuntimeError("cv2.imdecode failed for downloaded image")
-        return img
+        arr = np.frombuffer(r.content, dtype=np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
 def _to_png_bytes(mask: np.ndarray) -> bytes:
     pil = Image.fromarray(mask)
@@ -58,7 +67,7 @@ def _to_png_bytes(mask: np.ndarray) -> bytes:
     pil.save(buf, format="PNG")
     return buf.getvalue()
 
-# --- Masking (OpenCV Haar + жёсткий край, расширение) ---
+# --- Masking ---
 def _expand_rect(x, y, w, h, expand_px, W, H):
     x2, y2 = x + w, y + h
     x = max(0, x - expand_px)
@@ -67,71 +76,48 @@ def _expand_rect(x, y, w, h, expand_px, W, H):
     y2 = min(H, y2 + expand_px)
     return int(x), int(y), int(x2 - x), int(y2 - y)
 
-def make_face_mask(image_bgr: np.ndarray, expand_ratio: float = 0.10, dilate_px: int = 0) -> np.ndarray:
+def make_face_mask(image_bgr: np.ndarray, expand_ratio: float = 0.10) -> np.ndarray:
+    """Простая маска: жесткий bbox лица с запасом по ширине кадра (+10% по умолч.)."""
     H, W = image_bgr.shape[:2]
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(64, 64))
-
+    face_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+    faces = face_cascade.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=5, minSize=(64, 64)
+    )
     mask = np.zeros((H, W), dtype=np.uint8)
-
     if len(faces) == 0:
-        # fallback: прямоугольник по центру верхней половины
+        # fallback — примерный прямоугольник по центру
         w = int(W * 0.25)
         h = int(H * 0.35)
         x = W // 2 - w // 2
-        y = max(0, H // 4 - h // 4)
+        y = H // 4
         faces = [(x, y, w, h)]
-
     for (x, y, w, h) in faces:
         expand_px = int(W * expand_ratio)
         x, y, w, h = _expand_rect(x, y, w, h, expand_px, W, H)
-        mask[y:y + h, x:x + w] = 255  # ЖЁСТКИЙ край
-
-    if dilate_px and dilate_px > 0:
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * dilate_px + 1, 2 * dilate_px + 1))
-        mask = cv2.dilate(mask, k)
-        mask = np.where(mask >= 128, 255, 0).astype(np.uint8)
-
+        mask[y : y + h, x : x + w] = 255
     return mask
-
-def put_mask_to_s3(key: str, mask_png: bytes):
-    s3_client().put_object(Bucket=S3_BUCKET, Key=key, Body=mask_png, ContentType="image/png")
-    return s3_url(key)
 
 # --- Replicate ---
 def replicate_predict(input_dict: dict) -> dict:
-    import httpx, json
-
-    if not REPLICATE_TOKEN:
-        raise RuntimeError("REPLICATE_API_TOKEN is not set")
-
+    """Запуск предсказания на Replicate c явной версией модели (иначе 422)."""
     headers = {
-        "Authorization": f"Token {REPLICATE_TOKEN}",  # именно Token
+        "Authorization": f"Token {REPLICATE_API_TOKEN}",  # именно Token
         "Content-Type": "application/json",
     }
-
-    # Если есть конкретная версия — используем универсальный endpoint
-    if REPLICATE_MODEL_VERSION:
-        url = "https://api.replicate.com/v1/predictions"
-        payload = {"version": REPLICATE_MODEL_VERSION, "input": input_dict}
-
-    # Иначе, если задали только модель (owner/name) — используем модельный endpoint
-    elif REPLICATE_MODEL:
-        url = f"https://api.replicate.com/v1/models/{REPLICATE_MODEL}/predictions"
-        payload = {"input": input_dict}
-
-    else:
-        raise RuntimeError("Set REPLICATE_MODEL_VERSION or REPLICATE_MODEL in environment")
-
-    r = httpx.post(url, headers=headers, json=payload, timeout=120)
-    if r.status_code >= 400:
-        try:
-            detail = r.json()
-        except Exception:
-            detail = {"raw": r.text}
-        raise RuntimeError(f"Replicate API error {r.status_code}: {detail}")
-    return r.json()
+    payload = {"version": REPLICATE_MODEL_VERSION, "input": input_dict}
+    with httpx.Client(timeout=60) as c:
+        r = c.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload)
+        if r.status_code >= 400:
+            # пробуем отдать понятную ошибку
+            try:
+                err = r.json()
+            except Exception:
+                err = {"raw": r.text}
+            raise RuntimeError(f"Replicate API error {r.status_code}: {err}")
+        return r.json()
 
 # --- Tasks ---
 @celery.task(name="worker.process_sku")
@@ -150,63 +136,54 @@ def process_sku(sku_id: int):
 def process_frame(frame_id: int):
     assert API_BASE_URL, "API_BASE_URL required for worker"
 
-    # 1) тянем описание кадра с API
+    # 1) тянем описание кадра
     with httpx.Client(timeout=60) as c:
         r = c.get(f"{API_BASE_URL}/internal/frame/{frame_id}")
         r.raise_for_status()
         info = r.json()
 
-    # 2) URL исходника
-    original_url = info.get("original_url")
-    original_key = info.get("original_key")
     sku_code = info["sku"]["code"]
 
+    # 2) URL исходника (если ключ — делаем presigned GET)
+    original_url = info.get("original_url")
+    original_key = info.get("original_key")
     if not original_url and original_key:
-        # приватный бакет → делаем presigned GET
-        original_url = s3_client().generate_presigned_url(
-            "get_object",
-            Params={"Bucket": S3_BUCKET, "Key": original_key},
-            ExpiresIn=3600,
-        )
+        original_url = s3_presigned_get(original_key, 3600)
 
-    if not original_url:
-        raise RuntimeError("No original_url or original_key provided for frame")
-
-    # 3) делаем маску (жёсткий край, +10% ширины)
-    mask_key = f"masks/{sku_code}/{frame_id}.png"
+    # 3) делаем маску и кладём в S3 (объект приватный), берём presigned GET для Replicate
     img = _download(original_url)
-    mask = make_face_mask(img, expand_ratio=0.10, dilate_px=0)
+    mask = make_face_mask(img, expand_ratio=0.10)
     mask_png = _to_png_bytes(mask)
-    put_mask_to_s3(mask_key, mask_png)
-    mask_url = s3_url(mask_key)
+    mask_key = f"masks/{sku_code}/{frame_id}.png"
+    put_bytes(mask_key, mask_png, "image/png")
+    mask_url = s3_presigned_get(mask_key, 3600)  # <<< КЛЮЧЕВАЯ ПРАВКА (был публичный URL)
 
-    # 4) собираем промпт (профиль головы "Маша" по умолчанию)
-    token = (info.get("head") or {}).get("trigger_token", "tnkfwm1")
-    prompt_tmpl = (info.get("head") or {}).get("prompt_template", "a photo of {token} female model")
+    # 4) собираем промпт по профилю головы (дефолт «Маша»)
+    head = info.get("head") or {}
+    token = head.get("trigger_token", "tnkfwm1")
+    prompt_tmpl = head.get("prompt_template", "a photo of {token} female model")
     prompt = prompt_tmpl.replace("{token}", token)
 
-    # 5) параметры генерации — по ТЗ
-    input_dict = {
-        "prompt": prompt,
-        "prompt_strength": 0.8,
-        "num_outputs": 3,
-        "num_inference_steps": 50,
-        "guidance_scale": 2.5,
-        "output_format": "png",
-        "image": original_url,
-        "mask": mask_url,
-    }
-
-    # 6) регистрируем поколение на API (для трекинга)
+    # 5) регистрируем поколение на бэке (для трекинга)
     with httpx.Client(timeout=60) as c:
         reg = c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/generation", json={})
         reg.raise_for_status()
         gen_id = reg.json()["id"]
 
-    # 7) шлём в Replicate
+    # 6) отправляем задачу в Replicate
+    input_dict = {
+        "prompt": prompt,
+        "image": original_url,
+        "mask": mask_url,
+        "prompt_strength": 0.8,
+        "num_outputs": 3,
+        "num_inference_steps": 28,
+        "guidance_scale": 2.5,
+        "output_format": "png",
+    }
     pred = replicate_predict(input_dict)
 
-    # 8) сохраняем prediction_id на API
+    # 7) сохраняем prediction_id на бэке
     with httpx.Client(timeout=60) as c:
         c.post(
             f"{API_BASE_URL}/internal/generation/{gen_id}/prediction",
