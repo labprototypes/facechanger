@@ -112,11 +112,24 @@ def internal_sku_frames(sku_id: str):  # <-- принимаем str
     return {"frames": [{"id": f["id"]} for f in frames]}
 
 @router.get("/frame/{frame_id}")
-def internal_frame_info(frame_id: int):
-    fr = FRAMES.get(frame_id)
+def internal_frame_info(frame_id: str | int):
+    fr = get_frame(frame_id)
     if not fr:
-        raise HTTPException(404, "Frame not found")
-    return _frame_view(fr)
+        raise HTTPException(status_code=404, detail="frame not found")
+
+    resp = {
+        "id": fr["id"],
+        "sku": fr["sku"],
+        "original_key": fr.get("original_key"),
+        "head": fr.get("head"),
+        # если у тебя уже есть поле с генерациями — отдаём аккуратно
+        "generations": fr.get("generations", []),
+    }
+    # original_url делаем НЕобязательным — если есть, отдадим, если нет, воркер сам сделает presigned GET по original_key
+    if fr.get("original_url"):
+        resp["original_url"] = fr["original_url"]
+
+    return resp
 
 @router.post("/frame/{frame_id}/generation")
 def internal_register_generation(frame_id: int):
