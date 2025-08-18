@@ -1,62 +1,72 @@
-const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/$/, "");
+'use client';
+import { useEffect, useState } from 'react';
+import { fetchSkuViewByCode } from '@/lib/api';
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) }
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
-}
+export default function SkuPage({ params }: { params: { sku: string }}) {
+  const [data, setData] = useState<any>(null);
+  const [err, setErr] = useState<string | null>(null);
 
-export async function requestUploadUrls(
-  sku: string,
-  files: File[]
-): Promise<{ urls: { filename: string; url: string; key: string; public: string }[] }> {
-  return api(`/skus/${encodeURIComponent(sku)}/upload-urls`, {
-    method: "POST",
-    body: JSON.stringify({ files: files.map(f => ({ filename: f.name, size: f.size })) })
-  });
-}
+  useEffect(() => {
+    setErr(null);
+    setData(null);
+    fetchSkuViewByCode(params.sku).then(setData).catch((e) => {
+      console.error(e);
+      setErr(e?.message || 'Error');
+    });
+  }, [params.sku]);
 
-export async function putToSignedUrl(signedUrl: string, file: File) {
-  const r = await fetch(signedUrl, {
-    method: "PUT",
-    headers: { "Content-Type": file.type || "application/octet-stream" },
-    body: file
-  });
-  if (!r.ok) throw new Error(`S3 PUT failed: ${r.status} ${r.statusText}`);
-}
+  if (err) return <div className="p-6 text-red-600">Ошибка загрузки: {err}</div>;
+  if (!data) return <div className="p-6">Загрузка…</div>;
 
-export async function registerFrames(sku: string, items: { filename: string; key: string }[]) {
-  return api(`/skus/${encodeURIComponent(sku)}/frames`, {
-    method: "POST",
-    body: JSON.stringify({ files: items })
-  });
-}
+  return (
+    <div className="p-6 space-y-6">
+      <div className="flex items-end justify-between">
+        <h1 className="text-2xl font-semibold">SKU: {data.sku.code}</h1>
+        <div className="text-sm text-gray-500">
+          Готово: <b>{data.done}</b> / {data.total}
+        </div>
+      </div>
 
-export async function startProcess(sku: string) {
-  return api(`/skus/${encodeURIComponent(sku)}/process`, { method: "POST" });
-}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {data.frames.map((fr: any) => (
+          <div key={fr.id} className="rounded-xl border p-4 space-y-3">
+            <div className="text-sm font-medium mb-1">Кадр #{fr.id}</div>
+            <div className="grid grid-cols-2 gap-3">
+              <img
+                src={fr.original_url}
+                alt="original"
+                className="w-full h-40 object-cover rounded-lg border"
+              />
+              {fr.mask_url ? (
+                <img
+                  src={fr.mask_url}
+                  alt="mask"
+                  className="w-full h-40 object-cover rounded-lg border"
+                />
+              ) : (
+                <div className="h-40 border rounded-lg grid place-items-center text-sm text-gray-500">
+                  Нет маски
+                </div>
+              )}
+            </div>
 
-export async function fetchSkuView(code: string) {
-  const r = await fetch(`${API}/skus/${code}`);
-  if (!r.ok) throw new Error("Failed to fetch sku");
-  return r.json();
-}
-
-export async function redoFrame(frameId: number, params: any = {}) {
-  const r = await fetch(`${API}/internal/frame/${frameId}/generation`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ params }),
-  });
-  if (!r.ok) throw new Error("Failed to enqueue");
-  return r.json();
-}
-
-export async function fetchSkuViewByCode(code: string) {
-  const r = await fetch(`${API}/internal/sku/by-code/${code}/view`, { cache: "no-store" });
-  if (!r.ok) throw new Error(`Failed to load SKU view: ${r.status}`);
-  return r.json();
+            {Array.isArray(fr.variants) && fr.variants.length > 0 ? (
+              <div className="grid grid-cols-3 gap-3">
+                {fr.variants.slice(0, 3).map((u: string, i: number) => (
+                  <img
+                    key={i}
+                    src={u}
+                    alt={`v${i + 1}`}
+                    className="w-full h-24 object-cover rounded-lg border"
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-gray-500">Варианты ещё не готовы</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
