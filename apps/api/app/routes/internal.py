@@ -126,6 +126,9 @@ def _frame_to_public_json(fr: Dict[str, Any]) -> Dict[str, Any]:
     # --- original_url ---
     original_url: Optional[str] = fr.get("original_url")
     original_key: Optional[str] = fr.get("original_key")
+    # важно: прокидываем original_key чтобы воркер мог подписать приватный объект без эвристик
+    if original_key:
+        out["original_key"] = original_key
 
     if not original_url and original_key:
         # Сначала попытаемся отдать public URL (короче, стабильно для UI),
@@ -183,8 +186,7 @@ def presign_get_url(key: str):
     """
     Возвращает presigned GET url для S3 key.
     """
-    url = s3util.get_presigned_get_url(key)
-    return {"url": url}
+    return {"url": _s3_signed_get(key)}
 
 @router.get("/sku/{sku_id}/frames")
 def internal_sku_frames(sku_id: str):
