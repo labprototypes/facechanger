@@ -127,7 +127,7 @@ def s3_key_from_public_url(url: str) -> Optional[str]:
     except Exception:
         return None
 
-def ensure_presigned_download(url: Optional[str], key: Optional[str]) -> str:
+def ensure_presigned_download(url: Optional[str] = None, key: Optional[str] = None) -> str:
     """
     Возвращает URL, доступный извне (Replicate):
     - если уже presigned (есть X-Amz-Algorithm/Signature) — вернёт как есть
