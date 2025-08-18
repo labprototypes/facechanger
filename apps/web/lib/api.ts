@@ -38,3 +38,19 @@ export async function registerFrames(sku: string, items: { filename: string; key
 export async function startProcess(sku: string) {
   return api(`/skus/${encodeURIComponent(sku)}/process`, { method: "POST" });
 }
+
+export async function fetchSkuView(code: string) {
+  const r = await fetch(`${API}/skus/${code}`);
+  if (!r.ok) throw new Error("Failed to fetch sku");
+  return r.json();
+}
+
+export async function redoFrame(frameId: number, params: any = {}) {
+  const r = await fetch(`${API}/internal/frame/${frameId}/generation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ params }),
+  });
+  if (!r.ok) throw new Error("Failed to enqueue");
+  return r.json();
+}
