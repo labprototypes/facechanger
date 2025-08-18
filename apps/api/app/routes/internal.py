@@ -109,7 +109,9 @@ def internal_sku_frames(sku_id: str):  # <-- принимаем str
     sid = _sku_to_int(sku_id)          # <-- приводим к int
     frames = list_frames_for_sku(sid)
     # воркеру нужен хотя бы id; остальное можете расширить по желанию
-    return {"frames": [{"id": f["id"]} for f in frames]}
+    return {
+        "frames": [{"id": fid} for fid in frames]
+    }
 
 @router.get("/frame/{frame_id}")
 def internal_frame_info(frame_id: str | int):
