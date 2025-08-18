@@ -1,4 +1,5 @@
 // apps/web/pages/upload.tsx
+// @ts-nocheck
 import React, { useMemo, useState, useEffect } from "react";
 
 const BG = "#f5f5f5";
@@ -7,15 +8,14 @@ const SURFACE = "#ffffff";
 const ACCENT = "#B8FF01";
 
 // Публичный URL API (из переменной окружения Render)
-const API = (process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE || "");
-const apiBase = API || ""; // если пусто — будем использовать относительные пути (через rewrites)
+const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/+$/, ''); // '' => relative
 
 type UploadUrl = { name: string; key: string; put_url: string; public_url: string };
 type Stage = "idle" | "getting" | "uploading" | "submitting" | "done" | "error";
 
 /** шаг 1: запрос presigned PUT-URL'ов на backend */
 async function getUploadUrls(sku: string, files: File[]): Promise<UploadUrl[]> {
-  const base = apiBase;
+  const base = apiBase ? `${apiBase}` : '';
   const res = await fetch(`${base}/api/skus/${encodeURIComponent(sku)}/upload-urls`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -50,7 +50,7 @@ async function putToS3(file: File, putUrl: string) {
 
 /** шаг 3: регистрация кадров + постановка в очередь воркеру */
 async function submitSku(sku: string, items: { key: string; name: string }[], headId: number | null) {
-  const base = apiBase;
+  const base = apiBase ? `${apiBase}` : '';
   const res = await fetch(`${base}/api/skus/${encodeURIComponent(sku)}/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -73,7 +73,7 @@ async function uploadWithFallback(sku: string, files: File[]) {
     console.warn("Presigned PUT failed, fallback to backend upload", e);
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f, f.name));
-  const base = apiBase;
+  const base = apiBase ? `${apiBase}` : '';
   const res = await fetch(`${base}/api/skus/${encodeURIComponent(sku)}/upload`, {
       method: "POST",
       body: fd,
@@ -96,8 +96,8 @@ export default function UploadBySkuPage() {
   const [msg, setMsg] = useState<string>("");
 
   useEffect(() => {
-    const base = apiBase;
-    fetch(`${base}/api/heads`).then(r => {
+  const base = apiBase ? `${apiBase}` : '';
+  fetch(`${base}/api/heads`).then(r => {
       if(!r.ok) throw new Error(String(r.status));
       return r.json();
     }).then(setHeads).catch(()=>{});

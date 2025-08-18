@@ -1,8 +1,9 @@
 // web/lib/api.ts — строка 1
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "https://web-frontend-pwr7.onrender.com";
-
-const API = process.env.NEXT_PUBLIC_API_URL!;
+// Determine API base. If NEXT_PUBLIC_API_URL not provided at build time we fallback
+// to empty string meaning we will use relative paths (must have rewrites configured).
+// We never allow the literal string 'undefined' to slip into URLs.
+const raw = process.env.NEXT_PUBLIC_API_URL;
+export const API_BASE = raw ? raw.replace(/\/+$/, "") : ""; // '' => relative
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -44,13 +45,15 @@ export async function startProcess(sku: string) {
 }
 
 export async function fetchSkuView(code: string) {
-  const r = await fetch(`${API}/skus/${code}`);
+  const base = API_BASE || "";
+  const r = await fetch(`${base}/api/skus/${code}`);
   if (!r.ok) throw new Error("Failed to fetch sku");
   return r.json();
 }
 
 export async function redoFrame(frameId: number, params: any = {}) {
-  const r = await fetch(`${API}/internal/frame/${frameId}/generation`, {
+  const base = API_BASE || "";
+  const r = await fetch(`${base}/internal/frame/${frameId}/generation`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ params }),
@@ -60,7 +63,8 @@ export async function redoFrame(frameId: number, params: any = {}) {
 }
 
 export async function fetchSkuViewByCode(code: string) {
-  const r = await fetch(`${API}/internal/sku/by-code/${code}/view`, { cache: "no-store" });
+  const base = API_BASE || "";
+  const r = await fetch(`${base}/internal/sku/by-code/${code}/view`, { cache: "no-store" });
   if (!r.ok) throw new Error(`Failed to load SKU view: ${r.status}`);
   return r.json();
 }
