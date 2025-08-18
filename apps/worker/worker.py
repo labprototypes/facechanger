@@ -111,25 +111,22 @@ def process_sku(sku_id):
         print("WARN: API_BASE_URL is not set; cannot fetch frames.")
         return
 
-    # --- Нормализуем sku_id: поддерживаем '1' и 'sku_1'
+    # поддерживаем '1' и 'sku_1'
     sid_str = str(sku_id)
     if not sid_str.isdigit():
-        sid_str = sid_str.split("_")[-1]  # 'sku_1' -> '1'
+        sid_str = sid_str.split("_")[-1]
 
-    # 1) тянем список кадров
     with httpx.Client(timeout=60) as c:
         r = c.get(f"{API_BASE_URL}/internal/sku/{sid_str}/frames")
         r.raise_for_status()
         data = r.json()
 
-    # 2) поддерживаем разные форматы ответа: {"frames":[...]} или {"items":[...]}
     frames_payload = data.get("frames")
     if frames_payload is None:
         frames_payload = data.get("items", [])
 
     frame_ids: list[int] = []
     for item in frames_payload:
-        # элемент может быть dict или просто id/строка
         fid_raw = item.get("id") if isinstance(item, dict) else item
         if fid_raw is None:
             continue
