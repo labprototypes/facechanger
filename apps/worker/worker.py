@@ -323,10 +323,17 @@ def process_frame(frame_id: int):
 
     # 2) маска -> в S3 (с фолбэком presigned при необходимости)
     mask_key = f"masks/{sku_code}/{frame_id}.png"
-    img = _download(original_url)
+    img = fetch_source_image_bgr(original_url, original_key)
     mask = make_face_mask(img, expand_ratio=0.10)
     mask_png = _to_png_bytes(mask)
     put_mask_to_s3(mask_key, mask_png)
+    
+    # безопасно для приватного бакета:
+    mask_url = s3_client().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": S3_BUCKET, "Key": mask_key},
+        ExpiresIn=3600,
+    )
 
     image_url_for_model = ensure_presigned_download(original_url, original_key)
     mask_url_for_model  = ensure_presigned_download(None, mask_key)
@@ -346,6 +353,14 @@ def process_frame(frame_id: int):
     if not generation_id:
         raise RuntimeError("internal generation create returned no id")
 
+    source_image_url = original_url
+    if original_key:  # всегда безопаснее давать presigned в Replicate
+        source_image_url = s3_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": original_key},
+            ExpiresIn=3600,
+        )
+
     # 5) делаем prediction на Replicate
     input_dict = {
         "prompt": prompt,
@@ -354,8 +369,8 @@ def process_frame(frame_id: int):
         "num_inference_steps": 28,        # если используешь dev-версию модели
         "guidance_scale": 3,
         "output_format": "png",
-        "image": image_url_for_model,     # ← теперь presigned
-        "mask": mask_url_for_model,       # ← теперь presigned
+        "image": source_image_url,   # <-- теперь Replicate видит картинку
+        "mask": mask_url,    # ← теперь presigned
         # при необходимости остальные поля (replicate_weights и т.п.)
     }
 
