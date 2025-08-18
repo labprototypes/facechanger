@@ -24,6 +24,22 @@ _sku_counter = count(1)
 _frame_counter = count(1)
 _generation_counter = count(1)
 
+HEADS = {}              # head_id -> {id, name, trigger, model_version, params}
+NEXT_HEAD_ID = 1
+
+def create_head(payload):
+    global NEXT_HEAD_ID
+    head_id = NEXT_HEAD_ID
+    NEXT_HEAD_ID += 1
+    HEADS[head_id] = {
+        "id": head_id,
+        "name": payload["name"],
+        "trigger": payload.get("trigger", ""),
+        "model_version": payload["model_version"],  # owner/model:version_sha
+        "params": payload.get("params", {}),        # dict дефолтов: steps, guidance, prompt_strength и т.п.
+    }
+    return HEADS[head_id]
+
 def _now() -> float:
     return time()
 
