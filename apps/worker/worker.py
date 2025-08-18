@@ -242,8 +242,19 @@ def replicate_create_prediction(inp: Dict[str, Any]) -> Dict[str, Any]:
         "Content-Type": "application/json",
     }
     payload = {
-        "version": REPLICATE_MODEL_VERSION,
-        "input": inp,
+        "version": os.getenv("REPLICATE_MODEL_VERSION") or os.getenv("REPLICATE_MODEL"),  # версия/модель
+        "input": {
+            "image": source_image_url,        # presigned GET
+            "mask": mask_presigned_url,       # presigned GET
+            "prompt": prompt,                 # из SKU/head
+            "num_outputs": 3,                 # ← ВАЖНО
+            "num_inference_steps": steps,     # из настроек/параметров
+            "guidance_scale": guidance,
+            "prompt_strength": prompt_strength,
+        },
+        # если используете вебхуки:
+        "webhook": f"{API_BASE_URL}/api/webhooks/replicate",
+        "webhook_events_filter": ["start", "output", "completed", "failed"],
     }
     r = httpx.post(
         "https://api.replicate.com/v1/predictions",
