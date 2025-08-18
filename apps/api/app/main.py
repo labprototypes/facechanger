@@ -4,6 +4,7 @@ from .routes.skus import router as skus_router
 from .routes.heads import router as heads_router
 from .routes.internal import router as internal_router
 
+
 app = FastAPI()
 
 # CORS можно сузить позже
@@ -26,6 +27,7 @@ def health():
 # публичные ручки
 app.include_router(skus_router, prefix="/api")
 app.include_router(heads_router, prefix="/api")
+app.include_router(heads_router, prefix="")
 
 # служебные ручки для воркера (мы уже указываем полный префикс внутри файла)
 app.include_router(internal_router)
