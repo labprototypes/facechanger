@@ -1,3 +1,7 @@
+// web/lib/api.ts — строка 1
+export const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL || "https://web-frontend-pwr7.onrender.com";
+
 const API = process.env.NEXT_PUBLIC_API_URL!;
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
