@@ -220,8 +220,10 @@ def replicate_create_prediction(version: str, input_payload: Dict[str, Any], *, 
     payload = {
         "version": version,
         "input": input_payload,
+        # webhook optional: оставляем, если публичная ручка будет реализована
         "webhook": f"{API_BASE_URL}/api/webhooks/replicate",
-        "webhook_events_filter": ["start", "output", "completed", "failed"],
+        # Replicate валидирует список; допустимы: start, output, logs, completed
+        "webhook_events_filter": ["start", "output", "completed"],
     }
     r = httpx.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload, timeout=90)
     if r.status_code >= 400:
@@ -452,7 +454,11 @@ def process_frame(frame_id: int):
         "mask": mask_url_for_model,
     }
 
-    pred = replicate_create_prediction(model_version, input_dict, idempotency_key=f"gen-{generation_id}")
+    try:
+        pred = replicate_create_prediction(model_version, input_dict, idempotency_key=f"gen-{generation_id}")
+    except Exception as e:
+        print(f"[worker] replicate create failed frame={frame_id} gen={generation_id}: {e}")
+        return
     pred_id = pred.get("id")
     pred_get = (pred.get("urls") or {}).get("get")
     if not pred_id or not pred_get:
