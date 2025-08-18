@@ -5,12 +5,33 @@ import boto3
 from datetime import datetime
 
 # In-memory store из app/store.py
+# Предпочитаем реальные функции, если они есть в store.py
 try:
-    from ..store import FRAMES, SKU_FRAMES, SKU_BY_CODE  # type: ignore
+    from ..store import list_frames_for_sku, get_frame
 except Exception:
-    FRAMES: Dict[int, Dict[str, Any]] = {}
-    SKU_FRAMES: Dict[int, List[int]] = {}
-    SKU_BY_CODE: Dict[str, int] = {}
+    # Фоллбек: берём сырые структуры и даём минимальные реализации
+    from ..store import FRAMES, SKU_FRAMES
+    from typing import Any, List
+
+    def _int_from(val: Any, prefix: str) -> int:
+        s = str(val)
+        if s.startswith(prefix + "_"):
+            s = s.split("_", 1)[1]
+        if s.isdigit():
+            return int(s)
+        # не поднимаем здесь HTTPException — оставим совместимость с твоей логикой
+        raise ValueError(f"Bad id format: {val!r}")
+
+    def list_frames_for_sku(sku_id: int) -> List[dict]:
+        ids = SKU_FRAMES.get(int(sku_id), [])
+        return [FRAMES[i] for i in ids if i in FRAMES]
+
+    def get_frame(frame_id: Any):
+        try:
+            fid = _int_from(frame_id, "fr")
+        except Exception:
+            fid = int(frame_id)  # вдруг уже int
+        return FRAMES.get(fid)
 
 # Поколения (генерации)
 try:
