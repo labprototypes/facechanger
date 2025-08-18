@@ -1,6 +1,3 @@
-# apps/worker/worker.py
-# -*- coding: utf-8 -*-
-
 import os
 import io
 import uuid
@@ -56,6 +53,46 @@ def s3_put_bytes(key: str, data: bytes, content_type: str = "application/octet-s
     s3_client().put_object(Bucket=S3_BUCKET, Key=key, Body=data, ContentType=content_type)
     return s3_public_url(key)
 
+def s3_key_from_public_url(url: str) -> Optional[str]:
+    try:
+        p = urlparse(url)
+        host = (p.hostname or "").lower()
+        path = p.path.lstrip("/")
+        if not host or not path:
+            return None
+        if host == f"{S3_BUCKET}.s3.amazonaws.com" or host == f"{S3_BUCKET}.s3.{(S3_REGION or '').lower()}.amazonaws.com":
+            return path
+        if host.startswith("s3.") and host.endswith(".amazonaws.com"):
+            parts = path.split("/", 1)
+            if len(parts) == 2 and parts[0] == S3_BUCKET:
+                return parts[1]
+        if host.endswith(".s3.amazonaws.com") and host.split(".")[0] == S3_BUCKET:
+            return path
+        return None
+    except Exception:
+        return None
+
+def ensure_presigned_download(url: Optional[str], key: Optional[str]) -> str:
+    """
+    Возвращает URL, доступный извне (Replicate):
+    - если уже presigned (есть X-Amz-Algorithm/Signature) — вернёт как есть
+    - иначе сгенерит presigned по переданному key либо извлечённому из url
+    - если это вообще не S3-URL и без key — вернёт исходный url как есть
+    """
+    if url and ("X-Amz-Algorithm=" in url or "X-Amz-Signature=" in url):
+        return url
+    k = key
+    if not k and url:
+        k = s3_key_from_public_url(url)
+    if k:
+        return s3_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": k},
+            ExpiresIn=3600,
+        )
+    if url:
+        return url
+    raise ValueError("ensure_presigned_download: neither url nor key provided")
 
 # ======== IO helpers ========
 def http_get_bytes(url: str, timeout: int = 60) -> bytes:
@@ -285,11 +322,14 @@ def process_frame(frame_id: int):
         raise RuntimeError("Frame has no original_url or original_key")
 
     # 2) маска -> в S3 (с фолбэком presigned при необходимости)
-    img = fetch_source_image_bgr(original_url, original_key)
-    mask = make_face_mask(img, expand_ratio=MASK_EXPAND_RATIO)
-    mask_png = png_bytes_from_array(mask)
     mask_key = f"masks/{sku_code}/{frame_id}.png"
-    mask_url = s3_put_bytes(mask_key, mask_png, content_type="image/png")
+    img = _download(original_url)
+    mask = make_face_mask(img, expand_ratio=0.10)
+    mask_png = _to_png_bytes(mask)
+    put_mask_to_s3(mask_key, mask_png)
+
+    image_url_for_model = ensure_presigned_download(original_url, original_key)
+    mask_url_for_model  = ensure_presigned_download(None, mask_key)
 
     # 3) промпт (дефолтная "Маша" если профиля нет)
     head = info.get("head") or {}
@@ -307,16 +347,16 @@ def process_frame(frame_id: int):
         raise RuntimeError("internal generation create returned no id")
 
     # 5) делаем prediction на Replicate
-    inp = {
+    input_dict = {
         "prompt": prompt,
-        "image": original_url,   # сам Replicate стянет исходник по URL
-        "mask": mask_url,
         "prompt_strength": 0.8,
         "num_outputs": 3,
-        "num_inference_steps": 28,  # для FLUX dev обычно ок
-        "guidance_scale": 3.0,
+        "num_inference_steps": 28,        # если используешь dev-версию модели
+        "guidance_scale": 3,
         "output_format": "png",
-        "disable_safety_checker": True,
+        "image": image_url_for_model,     # ← теперь presigned
+        "mask": mask_url_for_model,       # ← теперь presigned
+        # при необходимости остальные поля (replicate_weights и т.п.)
     }
 
     pred = replicate_create_prediction(inp)
