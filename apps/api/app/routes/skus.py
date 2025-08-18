@@ -135,3 +135,35 @@ async def upload_via_api(sku_code: str, files: List[UploadFile] = File(...)):
         )
         out.append({"name": f.filename, "key": key})
     return {"items": out}
+
+@router.get("/{sku_code}")
+def get_sku_view(sku_code: str):
+    # найти sku_id
+    if sku_code not in SKU_BY_CODE:
+        return {"sku": {"code": sku_code}, "frames": []}
+    sku_id = SKU_BY_CODE[sku_code]
+
+    frames_out = []
+    for fid in SKU_FRAMES.get(sku_id, []):
+        fr = FRAMES[fid]
+        # original
+        original_key = fr.get("original_key")
+        original_url = public_url(original_key) if original_key else fr.get("original_url")
+
+        # mask
+        mask_key = fr.get("mask_key")
+        mask_url = public_url(mask_key) if mask_key else None
+
+        frames_out.append({
+            "id": fid,
+            "original_url": original_url,
+            "mask_url": mask_url,
+            "variants": fr.get("variants", []),   # [{ url, gen_id }]
+            "head": fr.get("head"),
+        })
+
+    total = len(frames_out)
+    done = sum(1 for f in frames_out if f.get("variants"))
+    progress = {"total": total, "ready": done}
+
+    return {"sku": {"code": sku_code, "id": sku_id}, "progress": progress, "frames": frames_out}
