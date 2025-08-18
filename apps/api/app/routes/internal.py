@@ -1,56 +1,61 @@
+# apps/api/app/routes/internal.py
+# -*- coding: utf-8 -*-
+
+"""
+Внутренние ручки для воркера и дашборда.
+
+Что даёт модуль:
+- GET  /internal/sku/{sku_id}/frames
+- GET  /internal/frame/{frame_id}
+- POST /internal/frame/{frame_id}/generation
+- POST /internal/generation/{generation_id}/prediction
+- GET  /internal/frame/{frame_id}/generations
+- (опционально) debug presign/public ссылок на S3
+
+Особенности:
+- Поддержка формата sku_id как "1" и "sku_1"
+- Гарантируем наличие original_url в ответе (через public или presigned)
+- Минимальные зависимости от внутреннего устройства store: используем только функции
+"""
+
+from __future__ import annotations
+
 import os
-from fastapi import APIRouter, HTTPException
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
+
 import boto3
-from datetime import datetime
-from ..store import SKU_FRAMES
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
-# In-memory store из app/store.py
-# Предпочитаем реальные функции, если они есть в store.py
-try:
-    from ..store import list_frames_for_sku, get_frame
-except Exception:
-    # Фоллбек: берём сырые структуры и даём минимальные реализации
-    from ..store import FRAMES, SKU_FRAMES
-    from typing import Any, List
-
-    def _int_from(val: Any, prefix: str) -> int:
-        s = str(val)
-        if s.startswith(prefix + "_"):
-            s = s.split("_", 1)[1]
-        if s.isdigit():
-            return int(s)
-        # не поднимаем здесь HTTPException — оставим совместимость с твоей логикой
-        raise ValueError(f"Bad id format: {val!r}")
-
-    def list_frames_for_sku(sku_id: int) -> List[dict]:
-        ids = SKU_FRAMES.get(int(sku_id), [])
-        return [FRAMES[i] for i in ids if i in FRAMES]
-
-    def get_frame(frame_id: Any):
-        try:
-            fid = _int_from(frame_id, "fr")
-        except Exception:
-            fid = int(frame_id)  # вдруг уже int
-        return FRAMES.get(fid)
-
-# Поколения (генерации)
-try:
-    from ..store import GENERATIONS, next_generation_id  # type: ignore
-except Exception:
-    GENERATIONS: Dict[int, Dict[str, Any]] = {}
-    def next_generation_id() -> int:
-        return (max(GENERATIONS.keys()) + 1) if GENERATIONS else 1
+# ---- store API (функции должны быть реализованы в apps/api/app/store.py) ----
+from ..store import (
+    # кадры / sku
+    list_frames_for_sku,         # (sku_id: int) -> List[int] | List[dict]
+    get_frame,                   # (frame_id: int) -> dict | None
+    set_frame_status,            # (frame_id: int, status: str) -> None
+    # генерации
+    register_generation,         # (frame_id: int) -> int
+    save_generation_prediction,  # (generation_id: int, prediction_id: str) -> None
+    generations_for_frame,       # (frame_id: int) -> List[dict]
+)
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
+# ---- S3 конфиг из окружения ----
 S3_BUCKET = os.environ["S3_BUCKET"]
-S3_REGION = os.environ.get("S3_REGION")
-S3_ENDPOINT = os.environ.get("S3_ENDPOINT")
+S3_REGION = os.environ.get("S3_REGION")       # у тебя us-east-2
+S3_ENDPOINT = os.environ.get("S3_ENDPOINT")   # если MinIO / кастом
 AWS_KEY = os.environ.get("AWS_ACCESS_KEY_ID")
 AWS_SECRET = os.environ.get("AWS_SECRET_ACCESS_KEY")
 
-def _s3():
+
+# =============================================================================
+# S3 helpers
+# =============================================================================
+def _s3_client():
+    """
+    Клиент S3 с поддержкой кастомного endpoint и region.
+    """
     return boto3.client(
         "s3",
         endpoint_url=S3_ENDPOINT or None,
@@ -59,161 +64,242 @@ def _s3():
         aws_secret_access_key=AWS_SECRET or None,
     )
 
-def _public_url(key: str) -> str:
+
+def _s3_public_url(key: str) -> str:
+    """
+    Публичный URL (если бакет публичный). Универсальный (без REGION в хосте).
+    Совпадает со схемой, которую ты уже используешь в других местах проекта.
+    """
     return f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
 
-def _signed_get_url(key: str, expires_seconds: int = 3600) -> str:
-    return _s3().generate_presigned_url(
-        ClientMethod="get_object",
+
+def _s3_signed_get(key: str, expires: int = 3600) -> str:
+    """
+    Presigned GET URL (если бакет приватный) — годится и для воркера, и для UI.
+    """
+    cli = _s3_client()
+    return cli.generate_presigned_url(
+        "get_object",
         Params={"Bucket": S3_BUCKET, "Key": key},
-        ExpiresIn=expires_seconds,
+        ExpiresIn=expires,
     )
 
-def _frame_view(fr: Dict[str, Any]) -> Dict[str, Any]:
-    out = {
-        "id": fr["id"],
-        "sku": fr["sku"],
-        "head": fr.get("head"),
-        "original_key": fr.get("original_key"),
-        "original_url": fr.get("original_url"),
-        "mask_key": fr.get("mask_key"),
-        "mask_url": fr.get("mask_url"),
-        "variants": fr.get("variants", []),
-        "generations": fr.get("generations", []),
+
+# =============================================================================
+# Модели
+# =============================================================================
+class PredictionIn(BaseModel):
+    prediction_id: str
+
+
+# =============================================================================
+# Утилиты
+# =============================================================================
+def _parse_sku_id(sku_id_or_code: str) -> int:
+    """
+    Принимает '1' или 'sku_1' — возвращает int 1.
+    Генерирует 422 если формат невалидный.
+    """
+    s = str(sku_id_or_code)
+    if s.startswith("sku_"):
+        s = s[4:]
+    try:
+        return int(s)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid sku id format")
+
+
+def _frame_to_public_json(fr: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Формируем JSON для ответа: добавляем original_url
+    (из fr['original_url'] либо строим по 'original_key').
+    Также мягко прокидываем mask и outputs если есть.
+    """
+    out: Dict[str, Any] = {
+        "id": fr.get("id"),
+        "sku": fr.get("sku") or {},
+        "head": fr.get("head") or {},
+        "status": fr.get("status") or "queued",
     }
-    if not out.get("original_url") and out.get("original_key"):
-        out["original_url"] = _signed_get_url(out["original_key"])
-    if not out.get("mask_url") and out.get("mask_key"):
-        out["mask_url"] = _public_url(out["mask_key"])
+
+    # --- original_url ---
+    original_url: Optional[str] = fr.get("original_url")
+    original_key: Optional[str] = fr.get("original_key")
+
+    if not original_url and original_key:
+        # Сначала попытаемся отдать public URL (короче, стабильно для UI),
+        # если бакет приватный — он просто не будет работать, но UI можно научить падать на presign:
+        try:
+            original_url = _s3_public_url(original_key)
+        except Exception:
+            original_url = None
+
+        if not original_url:
+            # подстраховка — пресайн (воркеру всегда ок)
+            original_url = _s3_signed_get(original_key)
+
+    # Если нет ни url ни key — отдаём None (не роняем 500, так UI/воркер могут показать/логировать проблему)
+    out["original_url"] = original_url
+
+    # --- mask (если есть) ---
+    if "mask_key" in fr and fr["mask_key"]:
+        out["mask_key"] = fr["mask_key"]
+        # сделаем mask_url (public), а если не пойдёт — подпишем
+        try:
+            out["mask_url"] = _s3_public_url(fr["mask_key"])
+        except Exception:
+            out["mask_url"] = _s3_signed_get(fr["mask_key"])
+
+    # --- outputs (если уже что-то сохранили) ---
+    if isinstance(fr.get("outputs"), list):
+        out["outputs"] = []
+        for item in fr["outputs"]:
+            if isinstance(item, dict):
+                # поддержка формата: {"key": "...", "url": "..."}
+                out["outputs"].append(item)
+            elif isinstance(item, str):
+                # поддержка формата: просто ключ
+                out["outputs"].append({"key": item, "url": _s3_public_url(item)})
+            else:
+                # неизвестный формат — мягко пропустим
+                continue
+
     return out
 
-from fastapi import HTTPException  # убедись, что импорт есть сверху файла
 
-def _sku_to_int(sku_id_any) -> int:
+# =============================================================================
+# Ручки
+# =============================================================================
+@router.get("/health")
+def internal_health():
     """
-    Принимает 1, "1" или "sku_1" и возвращает 1.
-    Иначе бросает 422.
+    Простая проверка живости сервиса
     """
-    # уже int
-    if isinstance(sku_id_any, int):
-        return sku_id_any
-    # строка вида "sku_1" или "1"
-    s = str(sku_id_any)
-    if s.startswith("sku_"):
-        s = s.split("_", 1)[1]
-    if s.isdigit():
-        return int(s)
-    raise HTTPException(status_code=422, detail="Invalid sku id format")
+    return {"ok": True}
+
 
 @router.get("/sku/{sku_id}/frames")
 def internal_sku_frames(sku_id: str):
     """
-    Возвращает список кадров для SKU.
-    Поддерживает идентификаторы вида '1' и 'sku_1'.
-    Формат ответа: {"frames": [{"id": <int>}, ...]}
+    Вернуть список кадров для SKU. Поддерживает '1' и 'sku_1'.
+    Возвращает {"frames": [ ... ]} со сведениями по каждому кадру.
     """
-    # нормализуем id
-    try:
-        sid = int(str(sku_id).split("_")[-1])   # "sku_1" -> 1
-    except ValueError:
-        raise HTTPException(status_code=422, detail="Bad sku_id")
+    sid = _parse_sku_id(sku_id)
 
-    ids = list(SKU_FRAMES.get(sid, []))  # если у вас есть list_frames_for_sku(sid), можно вызвать его
-    return {"frames": [{"id": fid} for fid in ids]}
+    frames = list_frames_for_sku(sid) or []
+    items: List[Dict[str, Any]] = []
+
+    # list_frames_for_sku может вернуть список id или список dict'ов.
+    if frames and isinstance(frames[0], int):
+        for fid in frames:
+            fr = get_frame(int(fid))
+            if not fr:
+                # мягко пропускаем битые ссылки
+                continue
+            items.append(_frame_to_public_json(fr))
+    else:
+        # уже пришли словари
+        for fr in frames:
+            if not isinstance(fr, dict):
+                # если по ошибке пришёл тип, ниспадаем 500
+                # а мягко игнорируем
+                continue
+            items.append(_frame_to_public_json(fr))
+
+    return {"frames": items}
+
 
 @router.get("/frame/{frame_id}")
-def internal_frame_info(frame_id: str | int):
-    fr = get_frame(frame_id)
+def internal_frame_info(frame_id: int):
+    """
+    Полная информация по кадру.
+    Гарантируем original_url (public или presigned) в ответе.
+    """
+    fr = get_frame(int(frame_id))
     if not fr:
         raise HTTPException(status_code=404, detail="frame not found")
 
-    resp = {
-        "id": fr["id"],
-        "sku": fr["sku"],
-        "original_key": fr.get("original_key"),
-        "head": fr.get("head"),
-        # если у тебя уже есть поле с генерациями — отдаём аккуратно
-        "generations": fr.get("generations", []),
-    }
-    # original_url делаем НЕобязательным — если есть, отдадим, если нет, воркер сам сделает presigned GET по original_key
-    if fr.get("original_url"):
-        resp["original_url"] = fr["original_url"]
+    return _frame_to_public_json(fr)
 
-    return resp
 
 @router.post("/frame/{frame_id}/generation")
-def internal_register_generation(frame_id: int):
-    fr = FRAMES.get(frame_id)
+def internal_create_generation(frame_id: int):
+    """
+    Зарегистрировать новую генерацию по кадру (внутренний ID).
+    Возвращает {"id": <generation_id:int>}
+    Также пытаемся обновить статус кадра на "generating".
+    """
+    fr = get_frame(int(frame_id))
     if not fr:
-        raise HTTPException(404, "Frame not found")
-    gid = next_generation_id()
-    GEN = {
-        "id": gid,
-        "frame_id": frame_id,
-        "status": "queued",
-        "created_at": datetime.utcnow().isoformat() + "Z",
-        "prediction_id": None,
-        "output": [],
-    }
-    GENERATIONS[gid] = GEN
-    fr.setdefault("generations", []).append(gid)
+        raise HTTPException(status_code=404, detail="frame not found")
+
+    gid = register_generation(int(frame_id))
+
+    # Статус обновляем без жёстких требований (если store не поддерживает — просто пропустим)
+    try:
+        set_frame_status(int(frame_id), "generating")
+    except Exception:
+        pass
+
     return {"id": gid}
 
-@router.post("/generation/{gen_id}/prediction")
-def internal_attach_prediction(gen_id: int, body: Dict[str, Any]):
-    gen = GENERATIONS.get(gen_id)
-    if not gen:
-        raise HTTPException(404, "Generation not found")
-    pred_id = body.get("prediction_id")
-    if not pred_id:
-        raise HTTPException(400, "prediction_id is required")
-    gen["prediction_id"] = pred_id
-    gen["status"] = "running"
+
+class _PredictionBody(BaseModel):
+    prediction_id: str
+
+
+@router.post("/generation/{generation_id}/prediction")
+def internal_set_prediction(generation_id: int, body: _PredictionBody):
+    """
+    Привязать prediction_id от Replicate к нашей генерации.
+    """
+    if not body.prediction_id:
+        raise HTTPException(status_code=422, detail="prediction_id is required")
+
+    save_generation_prediction(int(generation_id), body.prediction_id)
     return {"ok": True}
 
-@router.post("/generation/{gen_id}/result")
-def internal_attach_result(gen_id: int, body: Dict[str, Any]):
-    gen = GENERATIONS.get(gen_id)
-    if not gen:
-        raise HTTPException(404, "Generation not found")
-    urls = body.get("urls") or body.get("output") or []
-    if not isinstance(urls, list):
-        raise HTTPException(400, "urls must be a list")
-    gen["output"] = urls
-    gen["status"] = "succeeded"
-    fr = FRAMES.get(gen["frame_id"])
-    if fr is not None:
-        fr.setdefault("variants", [])
-        for u in urls:
-            if u not in fr["variants"]:
-                fr["variants"].append(u)
-    return {"ok": True, "saved": len(urls)}
 
-@router.post("/generation/{gen_id}/status")
-def internal_update_status(gen_id: int, body: Dict[str, Any]):
-    gen = GENERATIONS.get(gen_id)
-    if not gen:
-        raise HTTPException(404, "Generation not found")
-    status = body.get("status")
-    if status:
-        gen["status"] = status
-    if body.get("error"):
-        gen["error"] = body["error"]
-    return {"ok": True}
-
-# Для дашборда: отдаём состояние SKU по коду
-@router.get("/sku/by-code/{sku_code}/view")
-def sku_view_by_code(sku_code: str):
-    sku_id = SKU_BY_CODE.get(sku_code)
-    if not sku_id:
-        raise HTTPException(404, "SKU not found")
-    fids = SKU_FRAMES.get(sku_id, [])
-    frames = [_frame_view(FRAMES[fid]) for fid in fids if fid in FRAMES]
-    total = len(frames)
-    done = sum(1 for fr in frames if fr.get("variants"))
-    return {
-        "sku": {"code": sku_code, "id": sku_id},
-        "total": total,
-        "done": done,
-        "frames": frames,
+@router.get("/frame/{frame_id}/generations")
+def internal_list_generations(frame_id: int):
+    """
+    Список генераций кадра для UI/отладки.
+    Формат элементов зависит от реализации store.generations_for_frame.
+    Рекомендуемый формат элемента:
+    {
+      "id": int,
+      "prediction_id": str | None,
+      "status": "queued|running|succeeded|failed",
+      "outputs": [ { "key": "...", "url": "..." }, ... ]
     }
+    """
+    gens = generations_for_frame(int(frame_id)) or []
+    # На всякий случай убедимся, что это список
+    if not isinstance(gens, list):
+        gens = []
+    return {"items": gens}
+
+
+# =============================================================================
+# Отладочные ручки (можно удалить, но удобно иметь под рукой)
+# =============================================================================
+@router.get("/debug/s3_presign")
+def debug_s3_presign(key: str, expires: int = 3600):
+    """
+    Вернуть presigned GET для конкретного ключа (удобно проверять доступность).
+    """
+    try:
+        return {"url": _s3_signed_get(key, expires=expires)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/debug/s3_public")
+def debug_s3_public(key: str):
+    """
+    Вернуть public URL для ключа (если бакет публичный).
+    """
+    try:
+        return {"url": _s3_public_url(key)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
