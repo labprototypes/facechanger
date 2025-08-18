@@ -1,19 +1,24 @@
-# apps/api/app/routes/internal.py
 import os
-import boto3
 from fastapi import APIRouter, HTTPException
-from ..store import FRAMES, SKU_FRAMES
-from typing import List, Optional, Dict, Any
-import time
-from pydantic import BaseModel
-from fastapi import HTTPException
-import uuid
-from ..store import (
-    FRAMES, SKU_BY_CODE, SKU_FRAMES, register_generation, set_generation_prediction,
-    add_generation_results, set_generation_status, set_frame_mask_key, list_frames_for_sku_id
-)
-from ..s3util import public_url_for_key, presigned_get_for_key  # если нет – см. примечание ниже
-from pydantic import BaseModel
+from typing import Dict, Any, List, Optional
+import boto3
+from datetime import datetime
+
+# In-memory store из app/store.py
+try:
+    from ..store import FRAMES, SKU_FRAMES, SKU_BY_CODE  # type: ignore
+except Exception:
+    FRAMES: Dict[int, Dict[str, Any]] = {}
+    SKU_FRAMES: Dict[int, List[int]] = {}
+    SKU_BY_CODE: Dict[str, int] = {}
+
+# Поколения (генерации)
+try:
+    from ..store import GENERATIONS, next_generation_id  # type: ignore
+except Exception:
+    GENERATIONS: Dict[int, Dict[str, Any]] = {}
+    def next_generation_id() -> int:
+        return (max(GENERATIONS.keys()) + 1) if GENERATIONS else 1
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -23,13 +28,7 @@ S3_ENDPOINT = os.environ.get("S3_ENDPOINT")
 AWS_KEY = os.environ.get("AWS_ACCESS_KEY_ID")
 AWS_SECRET = os.environ.get("AWS_SECRET_ACCESS_KEY")
 
-class GenerationIn(BaseModel):
-    status: Optional[str] = None        # "QUEUED" | "RUNNING" | "DONE" | "FAILED"
-    output_keys: Optional[List[str]] = None  # список s3-ключей с результатами (если уже есть)
-    meta: Optional[Dict[str, Any]] = None    # любые доп. поля от воркера
-    error: Optional[str] = None              # текст ошибки, если упало
-
-def s3():
+def _s3():
     return boto3.client(
         "s3",
         endpoint_url=S3_ENDPOINT or None,
@@ -38,93 +37,120 @@ def s3():
         aws_secret_access_key=AWS_SECRET or None,
     )
 
-
-def public_url(key: str) -> str:
-    # если кастомный endpoint (S3-совместимое хранилище)
-    if S3_ENDPOINT:
-        return f"{S3_ENDPOINT.rstrip('/')}/{S3_BUCKET}/{key}"
-    # обычный AWS S3 с регионом
-    if S3_REGION:
-        return f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{key}"
-    # фоллбэк на us-east-1 стиль
+def _public_url(key: str) -> str:
     return f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
 
-
-def presigned_get_url(key: str, expires: int = 3600) -> str:
-    cli = s3()
-    return cli.generate_presigned_url(
-        "get_object",
+def _signed_get_url(key: str, expires_seconds: int = 3600) -> str:
+    return _s3().generate_presigned_url(
+        ClientMethod="get_object",
         Params={"Bucket": S3_BUCKET, "Key": key},
-        ExpiresIn=expires,
+        ExpiresIn=expires_seconds,
     )
 
+def _frame_view(fr: Dict[str, Any]) -> Dict[str, Any]:
+    out = {
+        "id": fr["id"],
+        "sku": fr["sku"],
+        "head": fr.get("head"),
+        "original_key": fr.get("original_key"),
+        "original_url": fr.get("original_url"),
+        "mask_key": fr.get("mask_key"),
+        "mask_url": fr.get("mask_url"),
+        "variants": fr.get("variants", []),
+        "generations": fr.get("generations", []),
+    }
+    if not out.get("original_url") and out.get("original_key"):
+        out["original_url"] = _signed_get_url(out["original_key"])
+    if not out.get("mask_url") and out.get("mask_key"):
+        out["mask_url"] = _public_url(out["mask_key"])
+    return out
 
 @router.get("/sku/{sku_id}/frames")
-def internal_frames_for_sku(sku_id: str):
-    ids = SKU_FRAMES.get(sku_id, [])
-    return {"frames": [{"id": fid} for fid in ids if fid in FRAMES]}
-
+def internal_frames_for_sku(sku_id: int):
+    fids = SKU_FRAMES.get(sku_id, [])
+    frames = [_frame_view(FRAMES[fid]) for fid in fids if fid in FRAMES]
+    return {"frames": frames}
 
 @router.get("/frame/{frame_id}")
-def internal_frame_info(frame_id: str):
+def internal_frame_info(frame_id: int):
     fr = FRAMES.get(frame_id)
     if not fr:
-        raise HTTPException(status_code=404, detail="frame not found")
-
-    key = fr.get("original_key")
-    if not key:
-        raise HTTPException(status_code=400, detail="frame has no original_key")
-
-    return {
-        "id": fr["id"],
-        "sku": fr.get("sku"),
-        "name": fr.get("name"),
-        "original_key": key,
-        "original_url": presigned_get_url(key),  # нужно воркеру
-        "public_url": public_url(key),
-        "head": fr.get("head"),
-    }
-
-class GenReq(BaseModel):
-    params: dict | None = None
+        raise HTTPException(404, "Frame not found")
+    return _frame_view(fr)
 
 @router.post("/frame/{frame_id}/generation")
-def internal_register_generation(frame_id: int, body: GenReq | None = None):
+def internal_register_generation(frame_id: int):
     fr = FRAMES.get(frame_id)
     if not fr:
-        return JSONResponse({"error":"frame_not_found"}, status_code=404)
-    g = register_generation(frame_id, (body.params if body else None) or {})
-    return {"id": g["id"]}
-
-class PredReq(BaseModel):
-    prediction_id: str
+        raise HTTPException(404, "Frame not found")
+    gid = next_generation_id()
+    GEN = {
+        "id": gid,
+        "frame_id": frame_id,
+        "status": "queued",
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "prediction_id": None,
+        "output": [],
+    }
+    GENERATIONS[gid] = GEN
+    fr.setdefault("generations", []).append(gid)
+    return {"id": gid}
 
 @router.post("/generation/{gen_id}/prediction")
-def internal_attach_prediction(gen_id: str, body: PredReq):
-    set_generation_prediction(gen_id, body.prediction_id)
+def internal_attach_prediction(gen_id: int, body: Dict[str, Any]):
+    gen = GENERATIONS.get(gen_id)
+    if not gen:
+        raise HTTPException(404, "Generation not found")
+    pred_id = body.get("prediction_id")
+    if not pred_id:
+        raise HTTPException(400, "prediction_id is required")
+    gen["prediction_id"] = pred_id
+    gen["status"] = "running"
     return {"ok": True}
-
-class ResultsReq(BaseModel):
-    urls: list[str]
 
 @router.post("/generation/{gen_id}/result")
-def internal_add_results(gen_id: str, body: ResultsReq):
-    add_generation_results(gen_id, body.urls)
-    return {"ok": True}
-
-class StatusReq(BaseModel):
-    status: str
-    error: str | None = None
+def internal_attach_result(gen_id: int, body: Dict[str, Any]):
+    gen = GENERATIONS.get(gen_id)
+    if not gen:
+        raise HTTPException(404, "Generation not found")
+    urls = body.get("urls") or body.get("output") or []
+    if not isinstance(urls, list):
+        raise HTTPException(400, "urls must be a list")
+    gen["output"] = urls
+    gen["status"] = "succeeded"
+    fr = FRAMES.get(gen["frame_id"])
+    if fr is not None:
+        fr.setdefault("variants", [])
+        for u in urls:
+            if u not in fr["variants"]:
+                fr["variants"].append(u)
+    return {"ok": True, "saved": len(urls)}
 
 @router.post("/generation/{gen_id}/status")
-def internal_set_status(gen_id: str, body: StatusReq):
-    set_generation_status(gen_id, body.status, body.error)
+def internal_update_status(gen_id: int, body: Dict[str, Any]):
+    gen = GENERATIONS.get(gen_id)
+    if not gen:
+        raise HTTPException(404, "Generation not found")
+    status = body.get("status")
+    if status:
+        gen["status"] = status
+    if body.get("error"):
+        gen["error"] = body["error"]
     return {"ok": True}
 
-class MaskReq(BaseModel):
-    mask_key: str
-
-@router.post("/frame/{frame_id}/mask")
-def internal_set_mask(frame_id: int, body: MaskReq):
-    set_frame_mask_key(frame_id, body.mask_key)
-    return {"ok": True"}
+# Для дашборда: отдаём состояние SKU по коду
+@router.get("/sku/by-code/{sku_code}/view")
+def sku_view_by_code(sku_code: str):
+    sku_id = SKU_BY_CODE.get(sku_code)
+    if not sku_id:
+        raise HTTPException(404, "SKU not found")
+    fids = SKU_FRAMES.get(sku_id, [])
+    frames = [_frame_view(FRAMES[fid]) for fid in fids if fid in FRAMES]
+    total = len(frames)
+    done = sum(1 for fr in frames if fr.get("variants"))
+    return {
+        "sku": {"code": sku_code, "id": sku_id},
+        "total": total,
+        "done": done,
+        "frames": frames,
+    }
