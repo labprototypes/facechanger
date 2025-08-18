@@ -26,11 +26,11 @@ API_BASE_URL = os.environ["API_BASE_URL"]  # например: https://api-backe
 
 # Replicate
 REPLICATE_API_TOKEN = os.environ["REPLICATE_API_TOKEN"]
-# важно: используем именно версию модели (owner/model:VERSION -> нам нужна часть после двоеточия)
+# используем именно версию модели (строка версии из Replicate UI)
 REPLICATE_MODEL_VERSION = os.environ["REPLICATE_MODEL_VERSION"]
 
 # Маска: насколько расширять прямоугольник лица (меньше — уже маска)
-MASK_EXPAND_RATIO = float(os.environ.get("MASK_EXPAND_RATIO", "0.06"))  # было 0.10, просили уменьшить
+MASK_EXPAND_RATIO = float(os.environ.get("MASK_EXPAND_RATIO", "0.06"))  # было 0.10
 
 # ======== Celery ========
 celery = Celery("worker", broker=REDIS_URL, backend=REDIS_URL)
@@ -166,6 +166,26 @@ def replicate_poll(get_url: str, max_wait_sec: int = 600, step_sec: float = 2.5)
             raise TimeoutError("Replicate polling timeout")
 
 
+# ======== Helpers: fetch original with presign fallback ========
+def fetch_source_image_bgr(original_url: str, original_key: Optional[str]) -> np.ndarray:
+    """
+    Пытаемся скачать original_url. Если получили 401/403/404 (приватный бакет),
+    а у нас есть original_key — генерим presigned GET и пробуем ещё раз.
+    """
+    try:
+        return http_get_image_bgr(original_url)
+    except httpx.HTTPStatusError as e:
+        code = e.response.status_code if e.response is not None else None
+        if code in (401, 403, 404) and original_key:
+            presigned = s3_client().generate_presigned_url(
+                "get_object",
+                Params={"Bucket": S3_BUCKET, "Key": original_key},
+                ExpiresIn=3600,
+            )
+            return http_get_image_bgr(presigned)
+        raise
+
+
 # ======== Tasks ========
 @celery.task(name="worker.process_sku")
 def process_sku(sku_id: int):
@@ -197,7 +217,7 @@ def process_frame(frame_id: int):
     """
     Полный пайплайн:
     - тянем фрейм
-    - скачиваем original_url (если нет — бэк вернёт presigned)
+    - скачиваем original_url (если приватно — делаем presigned по original_key)
     - строим маску и грузим её в S3
     - регистрируем генерацию на бэке
     - создаём prediction на Replicate, сохраняем prediction_id
@@ -215,19 +235,20 @@ def process_frame(frame_id: int):
     sku_code = str(sku.get("code") or f"sku_{sku.get('id', 'unknown')}")
 
     original_url: Optional[str] = info.get("original_url")
-    if not original_url:
-        # Бэк должен был проставить, но подстрахуемся
-        original_key = info.get("original_key")
-        if not original_key:
-            raise RuntimeError("Frame has no original_url or original_key")
+    original_key: Optional[str] = info.get("original_key")
+
+    if not original_url and original_key:
+        # Бэкенд не дал URL — генерим presigned
         original_url = s3_client().generate_presigned_url(
             "get_object",
             Params={"Bucket": S3_BUCKET, "Key": original_key},
             ExpiresIn=3600,
         )
+    if not original_url:
+        raise RuntimeError("Frame has no original_url or original_key")
 
-    # 2) маска -> в S3
-    img = http_get_image_bgr(original_url)
+    # 2) маска -> в S3 (с фолбэком presigned при необходимости)
+    img = fetch_source_image_bgr(original_url, original_key)
     mask = make_face_mask(img, expand_ratio=MASK_EXPAND_RATIO)
     mask_png = png_bytes_from_array(mask)
     mask_key = f"masks/{sku_code}/{frame_id}.png"
@@ -249,17 +270,15 @@ def process_frame(frame_id: int):
         raise RuntimeError("internal generation create returned no id")
 
     # 5) делаем prediction на Replicate
-    # Репликейт: если подадим image/mask + prompt_strength — это img2img/inpaint.
     inp = {
         "prompt": prompt,
-        "image": original_url,
+        "image": original_url,   # сам Replicate стянет исходник по URL
         "mask": mask_url,
         "prompt_strength": 0.8,
         "num_outputs": 3,
         "num_inference_steps": 28,  # для FLUX dev обычно ок
         "guidance_scale": 3.0,
         "output_format": "png",
-        # можно задать aspect_ratio, но при image+mask игнорируется
         "disable_safety_checker": True,
     }
 
@@ -281,13 +300,11 @@ def process_frame(frame_id: int):
     final = replicate_poll(pred_get)
     status = final.get("status")
     if status != "succeeded":
-        # логируем причину и выходим
         print(f"[worker] replicate prediction {pred_id} finished with status={status}, detail={final}")
         return
 
     # 8) выгружаем результаты в S3
     outputs: List[str] = []
-    # У Replicate чаще всего 'output' — массив URL'ов
     raw_outputs = final.get("output") or []
     if not isinstance(raw_outputs, list):
         raw_outputs = [raw_outputs] if raw_outputs else []
@@ -302,7 +319,7 @@ def process_frame(frame_id: int):
             if ext not in (".png", ".jpg", ".jpeg", ".webp"):
                 ext = ".png"
             key = f"outputs/{sku_code}/{frame_id}/{pred_id[:8]}_{i}{ext}"
-            # грубая эвристика контента
+            # эвристика контента
             ctype = (
                 "image/png" if ext == ".png"
                 else "image/jpeg" if ext in (".jpg", ".jpeg")
@@ -315,5 +332,3 @@ def process_frame(frame_id: int):
             print(f"[worker] failed to upload output {i} to S3: {e}")
 
     print(f"[worker] frame {frame_id}: uploaded {len(outputs)} outputs to S3")
-    # Здесь можно было бы дернуть ручку для сохранения outputs в store,
-    # но в текущем internal такой ручки нет. Файлы уже доступны по URL.
