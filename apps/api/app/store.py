@@ -9,18 +9,15 @@ from threading import RLock
 _lock = RLock()
 
 # SKU и кадры
-SKU_BY_CODE: dict[str, int] = {}
-SKU_FRAMES: dict[int, list[int]] = {}
+SKU_BY_CODE: Dict[str, int] = {}
+SKU_FRAMES: Dict[int, List[int]] = {}
 SKUS_BY_ID: Dict[str, Dict[str, Any]] = {}       # id -> sku record
-
 FRAMES_BY_ID: Dict[str, Dict[str, Any]] = {}     # frame_id -> frame record
 FRAME_BY_ID = FRAMES_BY_ID                        # алиас, на всякий
-
-# алиас, который ожидают некоторые модули
-FRAMES: dict[int, dict] = {}
+FRAMES: Dict[int, Dict[str, Any]] = {}
 # Счётчики id (для dev)
-_sku_counter = count(1)
-_frame_counter = count(1)
+_next_sku_id = 1
+_next_frame_id = 1
 
 # ---------------- Generations store ----------------
 # gen_id -> { id, frame_id, status, params, prediction_id, result_urls }
@@ -163,7 +160,7 @@ def register_frame(
         "status": status,
     })
 
-def get_frame(frame_id: int) -> dict | None:
+def get_frame(frame_id: int):
     return FRAMES.get(frame_id)
 
 def list_frames(sku_code: str) -> List[Dict[str, Any]]:
@@ -176,7 +173,7 @@ def list_frames(sku_code: str) -> List[Dict[str, Any]]:
     return [f for f in FRAMES_BY_ID.values() if f.get("sku") == sku_code]
 
 # ---- Алиас под старый импорт из routes/internal.py ----
-def list_frames_for_sku(sku_id: int) -> list[int]:
+def list_frames_for_sku(sku_id: int) -> List[int]:
     return list(SKU_FRAMES.get(sku_id, []))
 
 def set_frame_status(frame_id: str, status: str, **extra: Any) -> Optional[Dict[str, Any]]:
