@@ -169,22 +169,59 @@ def replicate_poll(get_url: str, max_wait_sec: int = 600, step_sec: float = 2.5)
 # ======== Helpers: fetch original with presign fallback ========
 def fetch_source_image_bgr(original_url: str, original_key: Optional[str]) -> np.ndarray:
     """
-    Пытаемся скачать original_url. Если получили 401/403/404 (приватный бакет),
-    а у нас есть original_key — генерим presigned GET и пробуем ещё раз.
+    Сначала пробуем скачать original_url.
+    Если 401/403/404 и нет original_key — пробуем извлечь key из URL.
+    Затем делаем presigned GET и повторяем скачивание.
     """
     try:
         return http_get_image_bgr(original_url)
     except httpx.HTTPStatusError as e:
         code = e.response.status_code if e.response is not None else None
-        if code in (401, 403, 404) and original_key:
-            presigned = s3_client().generate_presigned_url(
-                "get_object",
-                Params={"Bucket": S3_BUCKET, "Key": original_key},
-                ExpiresIn=3600,
-            )
-            return http_get_image_bgr(presigned)
+        if code in (401, 403, 404):
+            key = original_key or s3_key_from_public_url(original_url)
+            if key:
+                presigned = s3_client().generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": S3_BUCKET, "Key": key},
+                    ExpiresIn=3600,
+                )
+                # лог для отладки
+                print(f"[worker] S3 {code} on direct URL — retry with presigned for key={key}")
+                return http_get_image_bgr(presigned)
+        # если сюда дошли — фолбэк невозможен
         raise
 
+def s3_key_from_public_url(url: str) -> Optional[str]:
+    """
+    Пытаемся достать Key из публичного S3 URL:
+    - https://<bucket>.s3.amazonaws.com/<key>
+    - https://<bucket>.s3.<region>.amazonaws.com/<key>
+    - https://s3.<region>.amazonaws.com/<bucket>/<key>  (на всякий)
+    """
+    try:
+        p = urlparse(url)
+        host = (p.hostname or "").lower()
+        path = p.path.lstrip("/")
+        if not host or not path:
+            return None
+
+        # Виртуальный хостинг: <bucket>.s3.amazonaws.com / <bucket>.s3.<region>.amazonaws.com
+        if host == f"{S3_BUCKET}.s3.amazonaws.com" or host == f"{S3_BUCKET}.s3.{(S3_REGION or '').lower()}.amazonaws.com":
+            return path
+
+        # Путь-стиль: s3.<region>.amazonaws.com/<bucket>/<key>
+        if host.startswith("s3.") and host.endswith(".amazonaws.com"):
+            parts = path.split("/", 1)
+            if len(parts) == 2 and parts[0] == S3_BUCKET:
+                return parts[1]
+
+        # Ещё один вариант виртуального хоста (без region в host)
+        if host.endswith(".s3.amazonaws.com") and host.split(".")[0] == S3_BUCKET:
+            return path
+
+        return None
+    except Exception:
+        return None
 
 # ======== Tasks ========
 @celery.task(name="worker.process_sku")
