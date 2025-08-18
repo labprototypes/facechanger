@@ -113,7 +113,31 @@ def process_sku(sku_id: int):
     with httpx.Client(timeout=60) as c:
         r = c.get(f"{API_BASE_URL}/internal/sku/{sku_id}/frames")
         r.raise_for_status()
-        data = r.json()
+            data = r.json()
+            # Поддерживаем {"frames":[{"id":1}, ...]}, {"frames":[1,2,...]} и {"items":[...]}
+            frames_payload = data.get("frames")
+            if frames_payload is None:
+                frames_payload = data.get("items", [])
+        
+            frame_ids: list[int] = []
+            for item in frames_payload:
+                if isinstance(item, dict):
+                    fid = item.get("id") or item.get("frame_id") or item.get("frameId")
+                else:
+                    fid = item
+                if fid is None:
+                    continue
+                # допускаем 'fr_1' / 'frame_1' / 1
+                s = str(fid)
+                try:
+                    fid_int = int(s.split("_")[-1])
+                except Exception:
+                    continue
+                frame_ids.append(fid_int)
+        
+            print(f"[worker] frames for sku {sku_id}: {frame_ids}")
+            for fid in frame_ids:
+                process_frame.delay(fid)
     for fr in data.get("frames", []):
         process_frame.delay(fr["id"])
 
