@@ -8,6 +8,12 @@ import time
 from pydantic import BaseModel
 from fastapi import HTTPException
 import uuid
+from ..store import (
+    FRAMES, SKU_BY_CODE, SKU_FRAMES, register_generation, set_generation_prediction,
+    add_generation_results, set_generation_status, set_frame_mask_key, list_frames_for_sku_id
+)
+from ..s3util import public_url_for_key, presigned_get_for_key  # если нет – см. примечание ниже
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -79,46 +85,46 @@ def internal_frame_info(frame_id: str):
         "head": fr.get("head"),
     }
 
+class GenReq(BaseModel):
+    params: dict | None = None
+
 @router.post("/frame/{frame_id}/generation")
-def register_frame_generation(frame_id: str, body: GenerationIn):
+def internal_register_generation(frame_id: int, body: GenReq | None = None):
     fr = FRAMES.get(frame_id)
     if not fr:
-        raise HTTPException(status_code=404, detail="frame not found")
+        return JSONResponse({"error":"frame_not_found"}, status_code=404)
+    g = register_generation(frame_id, (body.params if body else None) or {})
+    return {"id": g["id"]}
 
-    # событие генерации
-    gen_id = f"gen_{uuid.uuid4().hex[:8]}"
-    event = {
-        "id": gen_id,
-        "ts": time.time(),
-        "status": body.status or "QUEUED",
-        "meta": body.meta or {},
-    }
-    if body.error:
-        event["error"] = body.error
+class PredReq(BaseModel):
+    prediction_id: str
 
-    gens = fr.setdefault("generations", [])
-    gens.append(event)
+@router.post("/generation/{gen_id}/prediction")
+def internal_attach_prediction(gen_id: str, body: PredReq):
+    set_generation_prediction(gen_id, body.prediction_id)
+    return {"ok": True}
 
-    # краткое состояние кадра
-    if body.status:
-        fr["status"] = body.status
+class ResultsReq(BaseModel):
+    urls: list[str]
 
-    # прикрепим результаты, если пришли ключи
-    if body.output_keys:
-        fr["outputs"] = [
-            {
-                "key": k,
-                "public_url": public_url(k),
-                "signed_url": presigned_get_url(k),
-            }
-            for k in body.output_keys
-        ]
+@router.post("/generation/{gen_id}/result")
+def internal_add_results(gen_id: str, body: ResultsReq):
+    add_generation_results(gen_id, body.urls)
+    return {"ok": True}
 
-    # вернём id, который ждёт воркер
-    return {
-        "id": gen_id,
-        "ok": True,
-        "frame_id": frame_id,
-        "status": fr.get("status", "IN_PROGRESS"),
-        "outputs": fr.get("outputs", []),
-    }
+class StatusReq(BaseModel):
+    status: str
+    error: str | None = None
+
+@router.post("/generation/{gen_id}/status")
+def internal_set_status(gen_id: str, body: StatusReq):
+    set_generation_status(gen_id, body.status, body.error)
+    return {"ok": True}
+
+class MaskReq(BaseModel):
+    mask_key: str
+
+@router.post("/frame/{frame_id}/mask")
+def internal_set_mask(frame_id: int, body: MaskReq):
+    set_frame_mask_key(frame_id, body.mask_key)
+    return {"ok": True"}
