@@ -260,6 +260,18 @@ def s3_key_from_public_url(url: str) -> Optional[str]:
     except Exception:
         return None
 
+# --- Backwards-compat shims (старые имена, чтобы не падало) ---
+def _download(url: str) -> np.ndarray:
+    # прежние места вызова будут работать; но лучше см. правку №2 ниже
+    return http_get_image_bgr(url)
+
+def _to_png_bytes(arr: np.ndarray) -> bytes:
+    # эквивалент прежней функции
+    pil = Image.fromarray(arr)
+    buf = io.BytesIO()
+    pil.save(buf, format="PNG")
+    return buf.getvalue()
+
 # ======== Tasks ========
 @celery.task(name="worker.process_sku")
 def process_sku(sku_id: int):
