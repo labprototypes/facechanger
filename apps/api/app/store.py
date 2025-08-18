@@ -5,200 +5,213 @@ from itertools import count
 from time import time
 from threading import RLock
 
-# ---------------- In-memory store (временное) ----------------
+# ---------------- In-memory store (temporary) ----------------
 _lock = RLock()
 
-# SKU и кадры
-SKU_BY_CODE: Dict[str, int] = {}
-SKU_FRAMES: Dict[int, List[int]] = {}
-SKUS_BY_ID: Dict[str, Dict[str, Any]] = {}       # id -> sku record
-FRAMES_BY_ID: Dict[str, Dict[str, Any]] = {}     # frame_id -> frame record
-FRAME_BY_ID = FRAMES_BY_ID                        # алиас, на всякий
-FRAMES: Dict[int, Dict[str, Any]] = {}
-# Счётчики id (для dev)
-_next_sku_id = 1
-_next_frame_id = 1
+# SKU and Frames registries
+SKU_BY_CODE: Dict[str, int] = {}            # "HEFQ" -> 1
+SKU_FRAMES: Dict[int, List[int]] = {}       # 1 -> [1,2,3]
+SKUS_BY_ID: Dict[int, Dict[str, Any]] = {}  # 1 -> {id, code, created_at}
+FRAMES_BY_ID: Dict[int, Dict[str, Any]] = {}  # 1 -> frame record
+FRAMES = FRAMES_BY_ID                        # alias for older imports
 
-# ---------------- Generations store ----------------
-# gen_id -> { id, frame_id, status, params, prediction_id, result_urls }
-GENERATIONS = {}
+# Generations registry (optional but useful for /internal endpoints)
+GENERATIONS_BY_ID: Dict[int, Dict[str, Any]] = {}   # 1 -> {id, frame_id, ...}
+FRAME_GENERATIONS: Dict[int, List[int]] = {}        # frame_id -> [gen_ids]
 
-GEN_SEQ = 1
-def next_gen_id() -> str:
-    global GEN_SEQ
-    gid = f"gen_{GEN_SEQ}"
-    GEN_SEQ += 1
-    return gid
+# Auto-increment counters
+_sku_counter = count(1)
+_frame_counter = count(1)
+_generation_counter = count(1)
 
-def register_generation(frame_id: int, params: dict | None = None) -> dict:
-    g = {
-        "id": next_gen_id(),
-        "frame_id": frame_id,
-        "status": "queued",
-        "params": params or {},
-        "prediction_id": None,
-        "result_urls": [],
-    }
-    GENERATIONS[g["id"]] = g
-    FRAMES[frame_id].setdefault("generations", []).append(g["id"])
-    return g
+def _now() -> float:
+    return time()
 
-def set_generation_prediction(gen_id: str, prediction_id: str):
-    if gen_id in GENERATIONS:
-        GENERATIONS[gen_id]["prediction_id"] = prediction_id
-
-def add_generation_results(gen_id: str, urls: list[str]):
-    if gen_id not in GENERATIONS:
-        return
-    GENERATIONS[gen_id]["result_urls"].extend(urls)
-    fid = GENERATIONS[gen_id]["frame_id"]
-    FRAMES[fid].setdefault("variants", [])
-    for u in urls:
-        FRAMES[fid]["variants"].append({"url": u, "gen_id": gen_id})
-
-def set_generation_status(gen_id: str, status: str, error: str | None = None):
-    if gen_id in GENERATIONS:
-        GENERATIONS[gen_id]["status"] = status
-        if error:
-            GENERATIONS[gen_id]["error"] = error
-
-def set_frame_mask_key(frame_id: int, key: str):
-    if frame_id in FRAMES:
-        FRAMES[frame_id]["mask_key"] = key
-
-def list_frames_for_sku_id(sku_id: int) -> list[dict]:
-    out = []
-    for fid in SKU_FRAMES.get(sku_id, []):
-        out.append(FRAMES[fid])
-    return out
-
+# ---------------- ID helpers ----------------
 def next_sku_id() -> int:
-    global _next_sku_id
-    sid = _next_sku_id
-    _next_sku_id += 1
-    return sid
-
+    """Return next integer SKU id."""
+    with _lock:
+        return next(_sku_counter)
 
 def next_frame_id() -> int:
-    global _next_frame_id
-    fid = _next_frame_id
-    _next_frame_id += 1
-    return fid
+    """Return next integer Frame id."""
+    with _lock:
+        return next(_frame_counter)
+
+def next_generation_id() -> int:
+    """Return next integer Generation id."""
+    with _lock:
+        return next(_generation_counter)
 
 # ---------------- SKU helpers ----------------
-def get_sku(code: str) -> Optional[Dict[str, Any]]:
-    return SKU_BY_CODE.get(code)
-
-def upsert_sku(code: str) -> Dict[str, Any]:
-    """Создать SKU, если нет, и вернуть запись. Гарантируем инициализацию SKU_FRAMES[code]."""
+def register_sku(code: str) -> int:
+    """
+    Ensure SKU exists for given code; return its integer id.
+    """
     with _lock:
-        sku = SKU_BY_CODE.get(code)
-        if sku is None:
-            sku = {
-                "id": next_sku_id(),
+        if code in SKU_BY_CODE:
+            sid = SKU_BY_CODE[code]
+        else:
+            sid = next(_sku_counter)
+            SKU_BY_CODE[code] = sid
+            SKU_FRAMES.setdefault(sid, [])
+            SKUS_BY_ID[sid] = {
+                "id": sid,
                 "code": code,
-                "created_at": time(),
+                "created_at": _now(),
             }
-            SKU_BY_CODE[code] = sku
-            SKUS_BY_ID[sku["id"]] = sku
-        # инициализируем список кадров для SKU
-        SKU_FRAMES.setdefault(code, [])
-        return sku
+    return sid
 
-def register_sku(code: str) -> Dict[str, Any]:
-    """Синоним upsert_sku (некоторые модули импортируют другое имя)."""
-    return upsert_sku(code)
+def get_sku(sku_id: int) -> Optional[Dict[str, Any]]:
+    return SKUS_BY_ID.get(int(sku_id))
 
-# ---------------- Frames helpers ----------------
-def add_frame(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Сохранить/обновить кадр.
-    Ожидаемые поля: id?, sku (код), original_url, mask_url?, head_token?, prompt_template?, params?, status?
-    """
-    frame_id = data.get("id") or next_frame_id()
-    sku_code = data.get("sku") or ""
-    frame = {
-        "id": frame_id,
-        "sku": sku_code,  # именно код SKU
-        "original_url": data.get("original_url"),
-        "mask_url": data.get("mask_url"),
-        "head_token": data.get("head_token", "tnkfwm1"),
-        "prompt_template": data.get("prompt_template", "a photo of {token} female model"),
-        "params": data.get("params", {}),
-        "status": data.get("status", "QUEUED"),
-        "created_at": time(),
-        "updated_at": time(),
-    }
+def upsert_sku(sku_id: int, data: Dict[str, Any]) -> None:
     with _lock:
-        FRAMES_BY_ID[frame_id] = frame
-        if sku_code:
-            # гарантируем наличие SKU и списка для него
-            upsert_sku(sku_code)
-            if frame_id not in SKU_FRAMES[sku_code]:
-                SKU_FRAMES[sku_code].append(frame_id)
-    return frame
+        rec = SKUS_BY_ID.setdefault(int(sku_id), {"id": int(sku_id), "created_at": _now()})
+        rec.update(data)
 
+# ---------------- Frame helpers ----------------
 def register_frame(
-    sku_code: str,
-    *,
-    original_url: str,
-    mask_url: Optional[str] = None,
-    head_token: str = "tnkfwm1",
-    prompt_template: str = "a photo of {token} female model",
-    params: Optional[Dict[str, Any]] = None,
-    status: str = "QUEUED",
-) -> Dict[str, Any]:
-    """Удобный конструктор кадра."""
-    return add_frame({
-        "id": next_frame_id(),
-        "sku": sku_code,
-        "original_url": original_url,
-        "mask_url": mask_url,
-        "head_token": head_token,
-        "prompt_template": prompt_template,
-        "params": params or {},
-        "status": status,
-    })
+    sku_id: int,
+    original_key: Optional[str] = None,
+    original_url: Optional[str] = None,
+    head: Optional[Dict[str, Any]] = None,
+) -> int:
+    """
+    Create a new frame record and attach to the SKU.
+    """
+    fid = next_frame_id()
+    add_frame(
+        {
+            "id": fid,
+            "sku": {"id": int(sku_id), "code": _code_for_sku(int(sku_id))},
+            "original_key": original_key,
+            "original_url": original_url,
+            "head": head or {
+                "trigger_token": "tnkfwm1",
+                "prompt_template": "a photo of {token} female model",
+            },
+            "status": "queued",
+            "created_at": _now(),
+        }
+    )
+    return fid
 
-def get_frame(frame_id: int):
-    return FRAMES.get(frame_id)
-
-def list_frames(sku_code: str) -> List[Dict[str, Any]]:
-    """Вернёт кадры SKU в порядке добавления (по SKU_FRAMES). Если по какой-то причине
-    списка нет — fallback через фильтрацию FRAMES_BY_ID."""
-    ids = SKU_FRAMES.get(sku_code)
-    if ids is not None:
-        return [FRAMES_BY_ID[i] for i in ids if i in FRAMES_BY_ID]
-    # fallback (на всякий)
-    return [f for f in FRAMES_BY_ID.values() if f.get("sku") == sku_code]
-
-# ---- Алиас под старый импорт из routes/internal.py ----
-def list_frames_for_sku(sku_id: int) -> List[int]:
-    return list(SKU_FRAMES.get(sku_id, []))
-
-def set_frame_status(frame_id: str, status: str, **extra: Any) -> Optional[Dict[str, Any]]:
+def add_frame(frame: Dict[str, Any]) -> int:
     with _lock:
-        fr = FRAMES_BY_ID.get(frame_id)
-        if not fr:
-            return None
-        fr["status"] = status
-        fr.update(extra)
-        fr["updated_at"] = time()
-        return fr
+        fid = int(frame["id"])
+        FRAMES_BY_ID[fid] = frame
+        SKU_FRAMES.setdefault(int(frame["sku"]["id"]), []).append(fid)
+        FRAME_GENERATIONS.setdefault(fid, [])
+    return fid
 
-# алиас — встречается в коде
+def get_frame(frame_id: int) -> Optional[Dict[str, Any]]:
+    return FRAMES_BY_ID.get(int(frame_id))
+
+def list_frames() -> List[Dict[str, Any]]:
+    return list(FRAMES_BY_ID.values())
+
+def list_frames_for_sku(sku_id: int) -> List[Dict[str, Any]]:
+    """
+    Return list of frame records for SKU. Accepts both int and str id like 'sku_1'.
+    """
+    sid = _normalize_sku_id(sku_id)
+    ids = SKU_FRAMES.get(sid, [])
+    return [FRAMES_BY_ID[i] for i in ids if i in FRAMES_BY_ID]
+
+def set_frame_status(frame_id: int, status: str) -> None:
+    with _lock:
+        fr = FRAMES_BY_ID.get(int(frame_id))
+        if fr is not None:
+            fr["status"] = status
+            fr["updated_at"] = _now()
+
+# backward name used earlier
 mark_frame_status = set_frame_status
 
+# ---------------- Generation helpers ----------------
+def register_generation(frame_id: int) -> int:
+    gid = next_generation_id()
+    with _lock:
+        GENERATIONS_BY_ID[gid] = {
+            "id": gid,
+            "frame_id": int(frame_id),
+            "created_at": _now(),
+            "prediction_id": None,
+            "status": "created",
+            "outputs": [],
+            "meta": {},
+        }
+        FRAME_GENERATIONS.setdefault(int(frame_id), []).append(gid)
+    return gid
+
+def save_generation_registration(frame_id: int) -> Dict[str, Any]:
+    """
+    Convenience wrapper used by internal routes to register and return as JSON.
+    """
+    gid = register_generation(frame_id)
+    return {"id": gid}
+
+def save_generation_prediction(generation_id: int, prediction_id: str) -> None:
+    with _lock:
+        gen = GENERATIONS_BY_ID.setdefault(int(generation_id), {"id": int(generation_id)})
+        gen["prediction_id"] = prediction_id
+        gen["updated_at"] = _now()
+        gen["status"] = "submitted"
+
+def set_generation_outputs(generation_id: int, outputs: List[str]) -> None:
+    with _lock:
+        gen = GENERATIONS_BY_ID.get(int(generation_id))
+        if gen is not None:
+            gen["outputs"] = outputs
+            gen["updated_at"] = _now()
+            gen["status"] = "completed"
+
+def get_generation(generation_id: int) -> Optional[Dict[str, Any]]:
+    return GENERATIONS_BY_ID.get(int(generation_id))
+
+def generations_for_frame(frame_id: int) -> List[Dict[str, Any]]:
+    gids = FRAME_GENERATIONS.get(int(frame_id), [])
+    return [GENERATIONS_BY_ID[g] for g in gids if g in GENERATIONS_BY_ID]
+
+# ---------------- Utilities ----------------
+def _normalize_sku_id(sku_id_like) -> int:
+    """
+    Accept 1 or '1' or 'sku_1' and return 1.
+    """
+    if isinstance(sku_id_like, int):
+        return sku_id_like
+    s = str(sku_id_like)
+    if s.startswith("sku_"):
+        s = s.split("_", 1)[1]
+    try:
+        return int(s)
+    except ValueError:
+        # unknown -> create new SKU id to avoid crashes (but better to fix caller)
+        return register_sku(str(sku_id_like))
+
+def _code_for_sku(sku_id: int) -> Optional[str]:
+    # reverse lookup
+    for code, sid in SKU_BY_CODE.items():
+        if sid == int(sku_id):
+            return code
+    return None
+
 __all__ = [
-    # сторы
-    "SKU_BY_CODE", "SKUS_BY_ID",
-    "FRAMES_BY_ID", "FRAME_BY_ID", "FRAMES",
-    "SKU_FRAMES",
-    # генераторы id
-    "next_sku_id", "next_frame_id",
+    # stores
+    "SKU_BY_CODE", "SKU_FRAMES", "SKUS_BY_ID",
+    "FRAMES_BY_ID", "FRAMES",
+    # id generators
+    "next_sku_id", "next_frame_id", "next_generation_id",
     # SKU API
-    "get_sku", "upsert_sku", "register_sku",
-    # Frames API
-    "add_frame", "register_frame", "get_frame", "list_frames", "list_frames_for_sku",
+    "register_sku", "get_sku", "upsert_sku",
+    # Frame API
+    "add_frame", "register_frame", "get_frame",
+    "list_frames", "list_frames_for_sku",
     "set_frame_status", "mark_frame_status",
+    # Generation API
+    "GENERATIONS_BY_ID", "FRAME_GENERATIONS",
+    "register_generation", "save_generation_registration",
+    "save_generation_prediction", "set_generation_outputs",
+    "get_generation", "generations_for_frame",
 ]
