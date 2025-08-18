@@ -117,7 +117,13 @@ export default function UploadBySkuPage() {
 
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const list = e.target.files ? Array.from(e.target.files) : [];
-    setFiles(list);
+    if (list.length > 10) {
+      setFiles(list.slice(0,10));
+      setMsg('Выбрано больше 10 файлов, сохранены только первые 10');
+      if (stage === 'idle') setStage('error');
+    } else {
+      setFiles(list);
+    }
   };
 
   const handleSend = async () => {
@@ -189,7 +195,7 @@ export default function UploadBySkuPage() {
               style={{ background: SURFACE, color: TEXT }}
             />
             {files.length > 0 && (
-              <div className="mt-2 text-sm opacity-80">Выбрано: {files.length}</div>
+              <div className="mt-2 text-sm opacity-80">Выбрано: {files.length} (максимум 10)</div>
             )}
           </div>
 

@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 
 import boto3
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 # ---- store API (функции должны быть реализованы в apps/api/app/store.py) ----
@@ -40,6 +41,8 @@ from ..store import (
     set_generation_outputs,      # (generation_id: int, outputs: List[str]) -> None
     set_frame_outputs,            # (frame_id: int, outputs: List[str]) -> None
     append_frame_outputs_version, # (frame_id: int, outputs: List[str]) -> None
+    set_frame_favorites, get_frame_favorites,
+    SKU_BY_CODE,
 )
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -178,6 +181,13 @@ def _frame_to_public_json(fr: Dict[str, Any]) -> Dict[str, Any]:
                 out["outputs"].append({"key": item, "url": _best_url_for_key(item)})
             else:
                 continue
+
+    # favorites (список ключей)
+    if fr.get("favorites"):
+        favs = []
+        for k in fr.get("favorites", []):
+            favs.append({"key": k, "url": _best_url_for_key(k)})
+        out["favorites"] = favs
 
     return out
 
@@ -428,6 +438,90 @@ def internal_export_urls(code: str):
                 else:
                     urls.append(_s3_public_url(o))
     return {"sku": code, "count": len(urls), "urls": urls}
+
+
+class _FavBody(BaseModel):
+    keys: list[str]
+
+@router.post("/frame/{frame_id}/favorites")
+def internal_set_favorites(frame_id: int, body: _FavBody):
+    fr = get_frame(int(frame_id))
+    if not fr:
+        raise HTTPException(status_code=404, detail="frame not found")
+    set_frame_favorites(int(frame_id), body.keys)
+    return {"ok": True, "favorites": get_frame_favorites(int(frame_id))}
+
+@router.get("/frame/{frame_id}/favorites")
+def internal_get_favorites(frame_id: int):
+    return {"frame_id": int(frame_id), "favorites": get_frame_favorites(int(frame_id))}
+
+@router.get("/sku/by-code/{code}/favorites.zip")
+def internal_download_favorites_zip(code: str):
+    from io import BytesIO
+    import zipfile
+    # SKU_BY_CODE already imported
+    if code not in SKU_BY_CODE:
+        raise HTTPException(status_code=404, detail="sku not found")
+    sid = SKU_BY_CODE[code]
+    frames = list_frames_for_sku(sid) or []
+    # collect favorite keys
+    fav_items: list[tuple[str,str]] = []  # (key, arcname)
+    for fr in frames:
+        favs = fr.get("favorites") or []
+        for k in favs:
+            arcname = f"{code}/frame_{fr['id']}/{k.split('/')[-1]}"
+            fav_items.append((k, arcname))
+    if not fav_items:
+        return {"error": "no favorites"}
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        s3c = _s3_client()
+        for key, arcname in fav_items:
+            try:
+                obj = s3c.get_object(Bucket=S3_BUCKET, Key=key)
+                data = obj['Body'].read()
+                zf.writestr(arcname, data)
+            except Exception:
+                continue
+    buf.seek(0)
+    return StreamingResponse(buf, media_type='application/zip', headers={"Content-Disposition": f"attachment; filename={code}_favorites.zip"})
+
+@router.get("/batch/{date}/export.zip")
+def internal_download_batch_export(date: str):
+    from io import BytesIO
+    import zipfile
+    # StreamingResponse imported globally
+    # batch = все SKU созданные в этот date
+    # Для каждого SKU включаем только избранные (если есть), иначе ничего.
+    sku_codes: list[str] = []
+    for code, sid in list(SKU_BY_CODE.items()):
+        frs = list_frames_for_sku(sid) or []
+        # проверим дату по первому фрейму или времени SKU (упрощение)
+        # (в store нет батча явно, пропускаем сложную фильтрацию)
+        sku_codes.append(code)
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        s3c = _s3_client()
+        for code in sku_codes:
+            sid = SKU_BY_CODE[code]
+            frames = list_frames_for_sku(sid) or []
+            any_added = False
+            for fr in frames:
+                favs = fr.get("favorites") or []
+                for k in favs:
+                    try:
+                        obj = s3c.get_object(Bucket=S3_BUCKET, Key=k)
+                        data = obj['Body'].read()
+                        arcname = f"{code}/frame_{fr['id']}/{k.split('/')[-1]}"
+                        zf.writestr(arcname, data)
+                        any_added = True
+                    except Exception:
+                        continue
+            if not any_added:
+                # маркер пустого SKU
+                zf.writestr(f"{code}/README.txt", "No favorites selected")
+    buf.seek(0)
+    return StreamingResponse(buf, media_type='application/zip', headers={"Content-Disposition": f"attachment; filename=batch_{date}.zip"})
 
 
 # =============================================================================

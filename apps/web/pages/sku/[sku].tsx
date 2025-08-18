@@ -21,7 +21,7 @@ function Modal({ open, onClose, children }: { open: boolean; onClose: () => void
   );
 }
 
-function FrameCard({ frame, onPreview, onRedo, onRegenerate }: { frame: any; onPreview: (variantIndex: number, frame: any) => void; onRedo: (frameId:number)=>void; onRegenerate: (frameId:number, params:any)=>void }) {
+function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: { frame: any; onPreview: (variantIndex: number, frame: any) => void; onRedo: (frameId:number)=>void; onRegenerate: (frameId:number, params:any)=>void; onSetFavorites: (frameId:number, favKeys:string[])=>void }) {
   const [mode, setMode] = useState<"view"|"tune"|"rerun">("view");
   const [accepted, setAccepted] = useState(false);
   const [showMask, setShowMask] = useState(false);
@@ -33,6 +33,13 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate }: { frame: any; onP
   const [format, setFormat] = useState(frame.pending_params?.output_format || 'png');
   const outs = frame.outputs || [];
   const versions = frame.outputs_versions || [];
+  const favKeys = (frame.favorites || []).map((f:any)=> f.key || f); // normalized keys list
+
+  const toggleFavorite = (key:string) => {
+    let next: string[];
+    if (favKeys.includes(key)) next = favKeys.filter(k=>k!==key); else next = [...favKeys, key];
+    onSetFavorites(frame.id, next);
+  };
   const original = frame.original_url;
   const maskUrl = frame.mask_url;
 
@@ -67,21 +74,35 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate }: { frame: any; onP
             <div key={vi}>
               <div className="text-[11px] opacity-60 mb-1">Версия V{vi+1}</div>
               <div className="grid grid-cols-3 gap-2">
-                {vers.map((o: any, idx: number) => (
-                  <button key={idx} onClick={() => onPreview(idx, frame)} className="aspect-square bg-black/5 rounded overflow-hidden flex items-center justify-center hover:opacity-80 border">
-                    <img src={o.url || o} alt={`v${vi+1}-${idx+1}`} className="object-cover w-full h-full" />
-                  </button>
-                ))}
+                {vers.map((o: any, idx: number) => {
+                  const key = o.key || o;
+                  const isFav = favKeys.includes(key);
+                  return (
+                    <div key={idx} className="relative group">
+                      <button onClick={() => onPreview(idx, frame)} className="aspect-square w-full bg-black/5 rounded overflow-hidden flex items-center justify-center hover:opacity-80 border">
+                        <img src={o.url || o} alt={`v${vi+1}-${idx+1}`} className="object-cover w-full h-full" />
+                      </button>
+                      <button title={isFav? 'Убрать из избранного':'В избранное'} onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border transition ${isFav? 'bg-lime-300':'bg-white/80 hover:bg-white'} shadow`}>★</button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )) : (
             <div className="grid grid-cols-3 gap-2">
               {outs.length === 0 && <div className="col-span-3 text-xs opacity-60 italic">Ждём результаты…</div>}
-              {outs.map((o: any, idx: number) => (
-                <button key={idx} onClick={() => onPreview(idx, frame)} className="aspect-square bg-black/5 rounded overflow-hidden flex items-center justify-center hover:opacity-80 border">
-                  <img src={o.url || o} alt={`v${idx+1}`} className="object-cover w-full h-full" />
-                </button>
-              ))}
+              {outs.map((o: any, idx: number) => {
+                const key = o.key || o;
+                const isFav = favKeys.includes(key);
+                return (
+                  <div key={idx} className="relative group">
+                    <button onClick={() => onPreview(idx, frame)} className="aspect-square w-full bg-black/5 rounded overflow-hidden flex items-center justify-center hover:opacity-80 border">
+                      <img src={o.url || o} alt={`v${idx+1}`} className="object-cover w-full h-full" />
+                    </button>
+                    <button title={isFav? 'Убрать из избранного':'В избранное'} onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border transition ${isFav? 'bg-lime-300':'bg-white/80 hover:bg-white'} shadow`}>★</button>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -192,6 +213,23 @@ export default function SkuPage() {
     try { await navigator.clipboard.writeText(exportUrls.join('\n')); setCopied(true); setTimeout(()=>setCopied(false), 2000); } catch(e){ console.error(e);}  
   };
 
+  const setFavorites = async (frameId:number, keys:string[]) => {
+    try {
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frameId}/favorites`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys }) });
+      // refresh specific frame locally
+      setData((prev:any)=>{
+        if (!prev) return prev;
+        return { ...prev, frames: prev.frames.map((f:any)=> f.id===frameId ? { ...f, favorites: keys.map(k=>({ key: k, url: k.startsWith('http')? k : f.outputs?.find((o:any)=> (o.key||o)===k)?.url || '' })) } : f ) };
+      });
+    } catch(e) { console.error(e); }
+  };
+
+  const downloadFavoritesZip = () => {
+    if (!sku) return;
+    const url = `${process.env.NEXT_PUBLIC_API_URL || ''}/internal/sku/by-code/${sku}/favorites.zip`;
+    window.open(url, '_blank');
+  };
+
   return (
     <div className="min-h-screen" style={{ background: BG, color: TEXT }}>
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
@@ -209,6 +247,7 @@ export default function SkuPage() {
             <span className="text-xs opacity-70 w-10 text-right">{progressPct}%</span>
             <button onClick={exportAll} className="px-3 py-1 rounded-lg border text-xs" style={{ background: SURFACE }}>{exporting? '...' : 'Экспорт URL'}</button>
             {exportUrls && <button onClick={copyAll} className="px-3 py-1 rounded-lg border text-xs" style={{ background: copied? ACCENT : SURFACE }}>{copied? 'Скопировано' : 'Копировать'}</button>}
+            <button onClick={downloadFavoritesZip} className="px-3 py-1 rounded-lg border text-xs" style={{ background: SURFACE }}>Скачать избранные</button>
             {allDone && <span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Готово</span>}
           </div>
         </div>
@@ -219,7 +258,7 @@ export default function SkuPage() {
         {data && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.frames.map((fr:any) => (
-              <FrameCard key={fr.id} frame={fr} onPreview={(v,frame)=>openPreview(v,frame)} onRedo={redoFrame} onRegenerate={(id, params)=>redoFrameWithParams(id, params)} />
+              <FrameCard key={fr.id} frame={fr} onPreview={(v,frame)=>openPreview(v,frame)} onRedo={redoFrame} onRegenerate={(id, params)=>redoFrameWithParams(id, params)} onSetFavorites={setFavorites} />
             ))}
           </div>
         )}

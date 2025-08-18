@@ -79,6 +79,8 @@ def submit_sku(sku_code: str, body: SubmitReq):
     Replaces buggy previous implementation (undefined vars)."""
     if not body.items:
         raise HTTPException(422, "items required")
+    if len(body.items) > 10:
+        raise HTTPException(422, "maximum 10 items per submit")
 
     sku_id = _ensure_sku(sku_code)
 

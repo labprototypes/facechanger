@@ -187,6 +187,30 @@ def set_frame_pending_params(frame_id: int, params: Dict[str, Any]) -> None:
             fr.setdefault("pending_params", {}).update(params)
             fr["updated_at"] = _now()
 
+def set_frame_favorites(frame_id: int, keys: List[str]) -> None:
+    """Store list of favorite output keys for a frame."""
+    with _lock:
+        fr = FRAMES_BY_ID.get(int(frame_id))
+        if fr is not None:
+            # deduplicate preserving order
+            seen = set()
+            favs: List[str] = []
+            for k in keys:
+                if not k:
+                    continue
+                if k in seen:
+                    continue
+                seen.add(k)
+                favs.append(k)
+            fr["favorites"] = favs
+            fr["updated_at"] = _now()
+
+def get_frame_favorites(frame_id: int) -> List[str]:
+    fr = FRAMES_BY_ID.get(int(frame_id))
+    if not fr:
+        return []
+    return list(fr.get("favorites") or [])
+
 # backward name used earlier
 mark_frame_status = set_frame_status
 
@@ -275,4 +299,6 @@ __all__ = [
     "register_generation", "save_generation_registration",
     "save_generation_prediction", "set_generation_outputs",
     "get_generation", "generations_for_frame",
+        # Favorites
+        "set_frame_favorites", "get_frame_favorites",
 ]
