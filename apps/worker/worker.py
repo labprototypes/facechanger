@@ -87,30 +87,7 @@ def _extract_key_from_s3_url(url: str) -> Optional[str]:
 
     return None
 
-def ensure_presigned_download(*, url: Optional[str] = None, key: Optional[str] = None) -> str:
-    """
-    Возвращает presigned GET URL для скачивания исходника.
-    Приоритет: если есть key — используем его. Если нет — пытаемся извлечь key из url.
-    """
-    if not key:
-        if not url:
-            raise ValueError("ensure_presigned_download: either url or key must be provided")
-        key = _extract_key_from_s3_url(url)
-        if not key:
-            raise ValueError(f"ensure_presigned_download: cannot extract key from url: {url}")
-
-    # серверная ручка API, которая выдаёт presigned GET по key
-    # используем API_BASE_URL (он уже есть в env и используется воркером для внутренних вызовов)
-    api_base = os.getenv("API_BASE_URL").rstrip("/")
-    presign_endpoint = f"{api_base}/internal/s3/presign-get?key={httpx.QueryParams({'key': key})['key']}"
-    # В проекте у вас, вероятно, уже есть подобная ручка. Если она называется иначе — подставьте актуальный путь.
-
-    with httpx.Client(timeout=30.0) as client:
-        r = client.get(presign_endpoint)
-        r.raise_for_status()
-        data = r.json()
-        # ожидаем data = {"url": "..."}
-        return data["url"]
+## removed earlier ensure_presigned_download variant (we keep unified version below)
 
 # --- S3: upload mask helper ---
 def put_mask_to_s3(key: str, data: bytes) -> str:
@@ -232,38 +209,22 @@ def make_face_mask(image_bgr: np.ndarray, expand_ratio: float) -> np.ndarray:
 
 
 # ======== Replicate ========
-def replicate_create_prediction(inp: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Создаёт prediction на Replicate. Обязательно передаём version.
-    Возвращает JSON от Replicate (должны быть поля id, status, urls.get).
-    """
+def replicate_create_prediction(version: str, input_payload: Dict[str, Any], *, idempotency_key: Optional[str] = None) -> Dict[str, Any]:
+    """Create prediction on Replicate with provided model version and inputs."""
     headers = {
         "Authorization": f"Token {REPLICATE_API_TOKEN}",
         "Content-Type": "application/json",
     }
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
     payload = {
-        "version": os.getenv("REPLICATE_MODEL_VERSION") or os.getenv("REPLICATE_MODEL"),  # версия/модель
-        "input": {
-            "image": source_image_url,        # presigned GET
-            "mask": mask_presigned_url,       # presigned GET
-            "prompt": prompt,                 # из SKU/head
-            "num_outputs": 3,                 # ← ВАЖНО
-            "num_inference_steps": steps,     # из настроек/параметров
-            "guidance_scale": guidance,
-            "prompt_strength": prompt_strength,
-        },
-        # если используете вебхуки:
+        "version": version,
+        "input": input_payload,
         "webhook": f"{API_BASE_URL}/api/webhooks/replicate",
         "webhook_events_filter": ["start", "output", "completed", "failed"],
     }
-    r = httpx.post(
-        "https://api.replicate.com/v1/predictions",
-        headers=headers,
-        json=payload,
-        timeout=60,
-    )
+    r = httpx.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload, timeout=90)
     if r.status_code >= 400:
-        # Логируем понятную ошибку
         try:
             err = r.json()
         except Exception:
@@ -439,7 +400,7 @@ def process_frame(frame_id: int):
     # 2) маска -> в S3 (с фолбэком presigned при необходимости)
     mask_key = f"masks/{sku_code}/{frame_id}.png"
     img, source_image_url = fetch_source_image_bgr(original_url, original_key)
-    mask = make_face_mask(img, expand_ratio=0.10)
+    mask = make_face_mask(img, expand_ratio=MASK_EXPAND_RATIO)
     mask_png = _to_png_bytes(mask)
     put_mask_to_s3(mask_key, mask_png)
     
@@ -455,8 +416,8 @@ def process_frame(frame_id: int):
 
     # 3) промпт (дефолтная "Маша" если профиля нет)
     head = info.get("head") or {}
-    token = head.get("trigger_token") or "tnkfwm1"
-    tmpl = head.get("prompt_template") or "a photo of {token} female model"
+    token = head.get("trigger_token") or head.get("trigger") or "tnkfwm1"
+    tmpl = head.get("prompt_template") or head.get("prompt") or "a photo of {token} female model"
     prompt = str(tmpl).replace("{token}", token)
 
     # 4) регистрируем генерацию в бэке
@@ -477,19 +438,21 @@ def process_frame(frame_id: int):
         )
 
     # 5) делаем prediction на Replicate
+    model_version = head.get("model_version") or os.getenv("REPLICATE_MODEL_VERSION") or os.getenv("REPLICATE_MODEL")
+    if not model_version:
+        raise RuntimeError("No model_version available (head.model_version or REPLICATE_MODEL_VERSION env)")
     input_dict = {
         "prompt": prompt,
         "prompt_strength": 0.8,
         "num_outputs": 3,
-        "num_inference_steps": 28,        # если используешь dev-версию модели
+        "num_inference_steps": 28,
         "guidance_scale": 3,
         "output_format": "png",
-        "image": source_image_url,  # <-- теперь Replicate видит картинку
-        "mask": mask_url,    # ← теперь presigned
-        # при необходимости остальные поля (replicate_weights и т.п.)
+        "image": image_url_for_model,
+        "mask": mask_url_for_model,
     }
 
-    pred = replicate_create_prediction(input_dict)
+    pred = replicate_create_prediction(model_version, input_dict, idempotency_key=f"gen-{generation_id}")
     pred_id = pred.get("id")
     pred_get = (pred.get("urls") or {}).get("get")
     if not pred_id or not pred_get:
@@ -539,3 +502,12 @@ def process_frame(frame_id: int):
             print(f"[worker] failed to upload output {i} to S3: {e}")
 
     print(f"[worker] frame {frame_id}: uploaded {len(outputs)} outputs to S3")
+    # уведомляем API о завершении генерации
+    try:
+        with httpx.Client(timeout=60) as c:
+            c.post(
+                f"{API_BASE_URL}/internal/generation/{generation_id}/complete",
+                json={"outputs": outputs},
+            )
+    except Exception as e:
+        print(f"[worker] failed to notify completion gen={generation_id}: {e}")

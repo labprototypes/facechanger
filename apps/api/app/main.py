@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .routes.skus import router as skus_router
 from .routes.heads import router as heads_router
 from .routes.internal import router as internal_router
+from .routes.dashboard import router as dashboard_router
 
 
 app = FastAPI()
@@ -28,6 +29,7 @@ def health():
 app.include_router(skus_router, prefix="/api")
 app.include_router(heads_router, prefix="/api")
 app.include_router(heads_router, prefix="")
+app.include_router(dashboard_router)
 
 # служебные ручки для воркера (мы уже указываем полный префикс внутри файла)
 app.include_router(internal_router)

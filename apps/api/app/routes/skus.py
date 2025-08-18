@@ -1,13 +1,15 @@
-import os, uuid
-from typing import List, Optional
+import os, uuid, math
+from typing import List, Optional, Dict, Any
 import boto3
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from ..store import (
     SKU_BY_CODE, next_sku_id, next_frame_id,
-    FRAMES, SKU_FRAMES
+    FRAMES, SKU_FRAMES, SKUS_BY_ID, register_sku,
+    register_frame, get_frame, list_frames_for_sku, FRAME_GENERATIONS, GENERATIONS_BY_ID,
+    HEADS
 )
-from ..celery_client import queue_process_sku
+from ..celery_client import queue_process_sku, queue_process_frame
 
 router = APIRouter(prefix="/skus", tags=["skus"])
 
@@ -43,8 +45,14 @@ class SubmitItem(BaseModel):
 
 class SubmitReq(BaseModel):
     items: List[SubmitItem]
-    head_id: Optional[int] = 1
+    head_id: Optional[int] = 1  # ссылка на head profile/registry (in-memory HEADS)
     enqueue: bool = True
+
+def _ensure_sku(code: str) -> int:
+    if code in SKU_BY_CODE:
+        return SKU_BY_CODE[code]
+    sid = register_sku(code)
+    return sid
 
 @router.post("/{sku_code}/upload-urls")
 def create_upload_urls(sku_code: str, body: UploadUrlsReq):
@@ -66,38 +74,60 @@ def create_upload_urls(sku_code: str, body: UploadUrlsReq):
 
 @router.post("/{sku_code}/submit")
 def submit_sku(sku_code: str, body: SubmitReq):
-    if sku_code in SKU_BY_CODE:
-        sku_id = SKU_BY_CODE[sku_code]
-    else:
-        sku_id = next_sku_id()
-        SKU_BY_CODE[sku_code] = sku_id
-        SKU_FRAMES[sku_id] = []
+    """Register frames for SKU and optionally enqueue processing.
 
-    frame_ids = []
-    for it in body.items:
-        fid = next_frame_id()
-        head_id = body.get("head_id")  # может быть None
-        sku["head_id"] = head_id
-        store.SKUS_BY_CODE[code] = sku
-        frame_ids.append(fid)
-        FRAMES[fid] = {
-            "id": fid,
-            "sku": {"code": sku_code, "id": sku_id},
-            "original_key": it.key,
-            "head": {
-                "trigger_token": "tnkfwm1",
-                "prompt_template": "a photo of {token} female model",
-            },
-            "variants": [],
+    Replaces buggy previous implementation (undefined vars)."""
+    if not body.items:
+        raise HTTPException(422, "items required")
+
+    sku_id = _ensure_sku(sku_code)
+
+    frame_ids: List[int] = []
+    head_obj = HEADS.get(body.head_id) if body.head_id else None
+    head_payload = None
+    if head_obj:
+        head_payload = {
+            "trigger_token": head_obj.get("trigger"),
+            "prompt_template": head_obj.get("params", {}).get("prompt_template", "a photo of {token} female model"),
+            "model_version": head_obj.get("model_version"),
         }
-        SKU_FRAMES[sku_id].append(fid)
+    for it in body.items:
+        fid = register_frame(sku_id, original_key=it.key, head=head_payload)
+        frame_ids.append(fid)
 
     queued = False
-    if body.enqueue and frame_ids:
+    if body.enqueue:
         queue_process_sku(sku_id)
         queued = True
-
     return {"sku_id": sku_id, "frame_ids": frame_ids, "queued": queued}
+
+@router.get("/{sku_code}")
+def sku_view_simple(sku_code: str):
+    """Simple SKU view used by legacy frontend call /skus/{code}.
+    Returns frames with basic status and generation counts."""
+    if sku_code not in SKU_BY_CODE:
+        raise HTTPException(404, "sku not found")
+    sku_id = SKU_BY_CODE[sku_code]
+    frames = list_frames_for_sku(sku_id)
+    items: List[Dict[str, Any]] = []
+    for fr in frames:
+        gens = FRAME_GENERATIONS.get(fr["id"], [])
+        items.append({
+            "id": fr["id"],
+            "original_key": fr.get("original_key"),
+            "status": fr.get("status", "queued"),
+            "generations": len(gens),
+        })
+    return {"sku": {"id": sku_id, "code": sku_code}, "frames": items}
+
+@router.get("/{sku_code}/frames")
+def list_sku_frames(sku_code: str):
+    if sku_code not in SKU_BY_CODE:
+        raise HTTPException(404, "sku not found")
+    sku_id = SKU_BY_CODE[sku_code]
+    frames = list_frames_for_sku(sku_id)
+    return {"items": frames}
+
 
 @router.post("/{sku_code}/upload")
 async def upload_via_api(sku_code: str, files: List[UploadFile] = File(...)):

@@ -1,5 +1,5 @@
 // apps/web/pages/upload.tsx
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 
 const BG = "#f5f5f5";
 const TEXT = "#000000";
@@ -47,11 +47,11 @@ async function putToS3(file: File, putUrl: string) {
 }
 
 /** шаг 3: регистрация кадров + постановка в очередь воркеру */
-async function submitSku(sku: string, items: { key: string; name: string }[]) {
+async function submitSku(sku: string, items: { key: string; name: string }[], headId: number | null) {
   const res = await fetch(`${API}/api/skus/${encodeURIComponent(sku)}/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ items, enqueue: true, head_id: 1 }),
+  body: JSON.stringify({ items, enqueue: true, head_id: headId }),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
@@ -86,8 +86,14 @@ async function uploadWithFallback(sku: string, files: File[]) {
 export default function UploadBySkuPage() {
   const [sku, setSku] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [heads, setHeads] = useState<any[]>([]);
+  const [headId, setHeadId] = useState<number | null>(null);
   const [stage, setStage] = useState<Stage>("idle");
   const [msg, setMsg] = useState<string>("");
+
+  useEffect(() => {
+    fetch(`${API}/api/heads`).then(r => r.json()).then(setHeads).catch(()=>{});
+  }, []);
 
   const disabled = useMemo(
     () =>
@@ -112,7 +118,7 @@ export default function UploadBySkuPage() {
 
       setStage("submitting");
       setMsg("Регистрируем кадры и ставим в очередь...");
-      const resp = await submitSku(sku.trim(), items);
+  const resp = await submitSku(sku.trim(), items, headId);
 
       setStage("done");
       setMsg(
@@ -146,6 +152,21 @@ export default function UploadBySkuPage() {
               className="mt-1 w-full px-3 py-2 rounded-xl border border-black/10"
               style={{ background: SURFACE, color: TEXT }}
             />
+          </div>
+
+          <div>
+            <label className="text-sm opacity-80">Head (модель)</label>
+            <select
+              className="mt-1 w-full px-3 py-2 rounded-xl border border-black/10"
+              style={{ background: SURFACE, color: TEXT }}
+              value={headId ?? ''}
+              onChange={e => setHeadId(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">— default</option>
+              {heads.map(h => (
+                <option key={h.id} value={h.id}>{h.name}</option>
+              ))}
+            </select>
           </div>
 
           <div>

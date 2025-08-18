@@ -37,6 +37,7 @@ from ..store import (
     register_generation,         # (frame_id: int) -> int
     save_generation_prediction,  # (generation_id: int, prediction_id: str) -> None
     generations_for_frame,       # (frame_id: int) -> List[dict]
+    set_generation_outputs,      # (generation_id: int, outputs: List[str]) -> None
 )
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -255,6 +256,12 @@ class _PredictionBody(BaseModel):
     prediction_id: str
 
 
+class _GenerationCompleteBody(BaseModel):
+    outputs: list[str] = []  # список публичных S3 URL или ключей
+    status: str | None = None
+    error: str | None = None
+
+
 @router.post("/generation/{generation_id}/prediction")
 def internal_set_prediction(generation_id: int, body: _PredictionBody):
     """
@@ -265,6 +272,26 @@ def internal_set_prediction(generation_id: int, body: _PredictionBody):
 
     save_generation_prediction(int(generation_id), body.prediction_id)
     return {"ok": True}
+
+
+@router.post("/generation/{generation_id}/complete")
+def internal_generation_complete(generation_id: int, body: _GenerationCompleteBody):
+    """Worker сообщает о завершении генерации и её выходах.
+    Передаём список outputs (ключи или URL)."""
+    outs = body.outputs or []
+    # Нормализуем: если пришёл URL вида https://bucket.s3.amazonaws.com/key -> превращаем в key
+    norm: list[str] = []
+    prefix = f"https://{S3_BUCKET}.s3.amazonaws.com/"
+    for o in outs:
+        if o.startswith(prefix):
+            norm.append(o[len(prefix):])
+        else:
+            norm.append(o)
+    try:
+        set_generation_outputs(int(generation_id), norm)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"failed to set outputs: {e}")
+    return {"ok": True, "count": len(norm)}
 
 
 @router.get("/frame/{frame_id}/generations")
