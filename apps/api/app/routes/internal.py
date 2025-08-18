@@ -24,7 +24,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import boto3
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 # ---- store API (функции должны быть реализованы в apps/api/app/store.py) ----
@@ -176,10 +176,26 @@ def _frame_to_public_json(fr: Dict[str, Any]) -> Dict[str, Any]:
 # =============================================================================
 @router.get("/health")
 def internal_health():
-    """
-    Простая проверка живости сервиса
-    """
+    """Простая проверка живости сервиса"""
     return {"ok": True}
+
+@router.post("/webhooks/replicate")
+async def webhook_replicate(payload: dict, request: Request):
+    """Replicate webhook stub (путь /api/webhooks/replicate)."""
+    event_status = payload.get("status")
+    prediction_id = payload.get("id")
+    print(f"[webhook] replicate event status={event_status} id={prediction_id}")
+    return {"ok": True}
+
+@router.get("/sku/by-code/{code}/view")
+def internal_sku_view_by_code(code: str):
+    from ..store import SKU_BY_CODE
+    if code not in SKU_BY_CODE:
+        raise HTTPException(status_code=404, detail="sku not found")
+    sid = SKU_BY_CODE[code]
+    frames = list_frames_for_sku(sid) or []
+    items = [_frame_to_public_json(fr) for fr in frames]
+    return {"sku": {"id": sid, "code": code}, "frames": items}
 
 @router.get("/internal/s3/presign-get")
 def presign_get_url(key: str):
