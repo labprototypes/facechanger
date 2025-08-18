@@ -54,3 +54,9 @@ export async function redoFrame(frameId: number, params: any = {}) {
   if (!r.ok) throw new Error("Failed to enqueue");
   return r.json();
 }
+
+export async function fetchSkuViewByCode(code: string) {
+  const r = await fetch(`${API}/internal/sku/by-code/${code}/view`, { cache: "no-store" });
+  if (!r.ok) throw new Error(`Failed to load SKU view: ${r.status}`);
+  return r.json();
+}
