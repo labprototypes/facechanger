@@ -7,7 +7,7 @@ const SURFACE = "#ffffff";
 const ACCENT = "#B8FF01";
 
 // Публичный URL API (из переменной окружения Render)
-const API = process.env.NEXT_PUBLIC_API_BASE_URL as string;
+const API = (process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE || "");
 
 type UploadUrl = { name: string; key: string; put_url: string; public_url: string };
 type Stage = "idle" | "getting" | "uploading" | "submitting" | "done" | "error";

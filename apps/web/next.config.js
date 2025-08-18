@@ -2,9 +2,10 @@
 const nextConfig = {
   reactStrictMode: true,
   async rewrites() {
-    const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/+$/,"");
+  const raw = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE || "";
+  const API_BASE = raw.replace(/\/+$/,'');
     if (!API_BASE) {
-      console.warn("[next.config] NEXT_PUBLIC_API_BASE is not set — rewrites will be empty");
+      console.warn("[next.config] API base env (NEXT_PUBLIC_API_URL) not set — rewrites empty");
       return [];
     }
     return [
