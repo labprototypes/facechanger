@@ -28,7 +28,6 @@ def health():
 # публичные ручки
 app.include_router(skus_router, prefix="/api")
 app.include_router(heads_router, prefix="/api")
-app.include_router(heads_router, prefix="")
 app.include_router(dashboard_router)
 
 # служебные ручки для воркера (мы уже указываем полный префикс внутри файла)
