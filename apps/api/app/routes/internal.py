@@ -49,6 +49,7 @@ S3_REGION = os.environ.get("S3_REGION")       # у тебя us-east-2
 S3_ENDPOINT = os.environ.get("S3_ENDPOINT")   # если MinIO / кастом
 AWS_KEY = os.environ.get("AWS_ACCESS_KEY_ID")
 AWS_SECRET = os.environ.get("AWS_SECRET_ACCESS_KEY")
+S3_REQUIRE_SIGNED = os.environ.get("S3_REQUIRE_SIGNED", "1").lower() in ("1","true","yes","on")
 
 
 # =============================================================================
@@ -85,6 +86,19 @@ def _s3_signed_get(key: str, expires: int = 3600) -> str:
         Params={"Bucket": S3_BUCKET, "Key": key},
         ExpiresIn=expires,
     )
+
+def _best_url_for_key(key: str) -> str:
+    """Return either public or presigned URL depending on config."""
+    if not key:
+        return ""
+    if S3_REQUIRE_SIGNED:
+        try:
+            return _s3_signed_get(key)
+        except Exception:
+            # fallback to public if signing failed
+            return _s3_public_url(key)
+    else:
+        return _s3_public_url(key)
 
 
 # =============================================================================
@@ -131,17 +145,9 @@ def _frame_to_public_json(fr: Dict[str, Any]) -> Dict[str, Any]:
     if original_key:
         out["original_key"] = original_key
 
-    if not original_url and original_key:
-        # Сначала попытаемся отдать public URL (короче, стабильно для UI),
-        # если бакет приватный — он просто не будет работать, но UI можно научить падать на presign:
-        try:
-            original_url = _s3_public_url(original_key)
-        except Exception:
-            original_url = None
-
-        if not original_url:
-            # подстраховка — пресайн (воркеру всегда ок)
-            original_url = _s3_signed_get(original_key)
+    if original_key:
+        # Перестраиваем url в соответствии с политикой (всегда подписываем если приватный)
+        original_url = _best_url_for_key(original_key)
 
     # Если нет ни url ни key — отдаём None (не роняем 500, так UI/воркер могут показать/логировать проблему)
     out["original_url"] = original_url
@@ -149,24 +155,27 @@ def _frame_to_public_json(fr: Dict[str, Any]) -> Dict[str, Any]:
     # --- mask (если есть) ---
     if "mask_key" in fr and fr["mask_key"]:
         out["mask_key"] = fr["mask_key"]
-        # сделаем mask_url (public), а если не пойдёт — подпишем
-        try:
-            out["mask_url"] = _s3_public_url(fr["mask_key"])
-        except Exception:
-            out["mask_url"] = _s3_signed_get(fr["mask_key"])
+        out["mask_url"] = _best_url_for_key(fr["mask_key"])
 
     # --- outputs (если уже что-то сохранили) ---
     if isinstance(fr.get("outputs"), list):
         out["outputs"] = []
         for item in fr["outputs"]:
             if isinstance(item, dict):
-                # поддержка формата: {"key": "...", "url": "..."}
-                out["outputs"].append(item)
+                key = item.get("key") or item.get("url")
+                if key and not item.get("url"):
+                    # восстановим url из key
+                    out["outputs"].append({"key": key, "url": _best_url_for_key(key)})
+                else:
+                    # если уже есть url, но нужна пересборка (например, был public, нужен presign)
+                    if key and S3_REQUIRE_SIGNED:
+                        out["outputs"].append({"key": key, "url": _best_url_for_key(key)})
+                    else:
+                        out["outputs"].append(item)
             elif isinstance(item, str):
-                # поддержка формата: просто ключ
-                out["outputs"].append({"key": item, "url": _s3_public_url(item)})
+                # просто ключ
+                out["outputs"].append({"key": item, "url": _best_url_for_key(item)})
             else:
-                # неизвестный формат — мягко пропустим
                 continue
 
     return out
