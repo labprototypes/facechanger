@@ -1,7 +1,7 @@
 import os
 import io
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from urllib.parse import urlparse, unquote
 from celery import Celery
 import httpx
@@ -9,6 +9,7 @@ import numpy as np
 import cv2
 from PIL import Image
 import boto3
+import re
 
 # ======== ENV ========
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -52,12 +53,64 @@ def s3_key_from_url(url: str) -> str | None:
     except Exception:
         return None
 
-def ensure_presigned_download(key: str, expires: int = 3600) -> str:
-    return s3_client().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": S3_BUCKET, "Key": key},
-        ExpiresIn=expires,
-    )
+def _extract_key_from_s3_url(url: str) -> Optional[str]:
+    """
+    Пытается достать S3 key из публичного/статического URL (AWS или MinIO-style).
+    Поддерживает:
+      - https://<bucket>.s3.<region>.amazonaws.com/<key>
+      - https://s3.<region>.amazonaws.com/<bucket>/<key>
+      - https://<endpoint>/<bucket>/<key>  (MinIO/кастом)
+    """
+    if not url: 
+        return None
+    u = urlparse(url)
+    host = u.netloc
+    path = u.path.lstrip("/")
+
+    # pattern 1: bucket.s3.region.amazonaws.com/key
+    m = re.match(rf"^{re.escape(S3_BUCKET)}\.s3\.[^/]+\.amazonaws\.com$", host)
+    if m:
+        return path or None
+
+    # pattern 2: s3.region.amazonaws.com/bucket/key
+    if host.startswith("s3.") and path.startswith(f"{S3_BUCKET}/"):
+        return path[len(S3_BUCKET) + 1 :] or None
+
+    # pattern 3: custom endpoint (minio): endpoint/bucket/key
+    if S3_ENDPOINT and host in S3_ENDPOINT:
+        if path.startswith(f"{S3_BUCKET}/"):
+            return path[len(S3_BUCKET) + 1 :] or None
+
+    # last resort: если явно видно /<bucket>/<key>
+    if path.startswith(f"{S3_BUCKET}/"):
+        return path[len(S3_BUCKET) + 1 :] or None
+
+    return None
+
+def ensure_presigned_download(*, url: Optional[str] = None, key: Optional[str] = None) -> str:
+    """
+    Возвращает presigned GET URL для скачивания исходника.
+    Приоритет: если есть key — используем его. Если нет — пытаемся извлечь key из url.
+    """
+    if not key:
+        if not url:
+            raise ValueError("ensure_presigned_download: either url or key must be provided")
+        key = _extract_key_from_s3_url(url)
+        if not key:
+            raise ValueError(f"ensure_presigned_download: cannot extract key from url: {url}")
+
+    # серверная ручка API, которая выдаёт presigned GET по key
+    # используем API_BASE_URL (он уже есть в env и используется воркером для внутренних вызовов)
+    api_base = os.getenv("API_BASE_URL").rstrip("/")
+    presign_endpoint = f"{api_base}/internal/s3/presign-get?key={httpx.QueryParams({'key': key})['key']}"
+    # В проекте у вас, вероятно, уже есть подобная ручка. Если она называется иначе — подставьте актуальный путь.
+
+    with httpx.Client(timeout=30.0) as client:
+        r = client.get(presign_endpoint)
+        r.raise_for_status()
+        data = r.json()
+        # ожидаем data = {"url": "..."}
+        return data["url"]
 
 # --- S3: upload mask helper ---
 def put_mask_to_s3(key: str, data: bytes) -> str:
@@ -229,46 +282,43 @@ def replicate_poll(get_url: str, max_wait_sec: int = 600, step_sec: float = 2.5)
 
 
 # ======== Helpers: fetch original with presign fallback ========
-def fetch_source_image_bgr(original_url: str | None, original_key: str | None):
-    """
-    Качаем исходник. Если прямой URL даёт 403 — пробуем presigned по ключу.
-    Если ключа нет, пытаемся извлечь key из URL.
-    Возвращаем: (img_bgr, фактический_url_который_скачали)
-    """
-    # 1) пробуем прямой URL
-    if original_url:
-        try:
-            raw = http_get_bytes(original_url, timeout=60)
-            img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
-            if img is None:
-                raise RuntimeError("cv2.imdecode returned None")
-            return img, original_url
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code != 403:
-                raise  # другая ошибка — пусть летит дальше
+def fetch_source_image_bgr(original_url: str, original_key: Optional[str]):
+    # ... пытаемся сходить по original_url ...
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.get(original_url)
+            if resp.status_code == 200:
+                img_bytes = resp.content
+                source_image_url = original_url
+                # decode to BGR
+                img_array = np.frombuffer(img_bytes, np.uint8)
+                img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)  # BGR
+                return img, source_image_url
+            else:
+                # 403 и т.п. — идём за presigned
+                pass
+    except Exception:
+        pass
 
-    # 2) если есть оригинальный key — делаем presigned
+    # fallback: presign по key
     if original_key:
-        presigned = ensure_presigned_download(original_key)
-        raw = http_get_bytes(presigned, timeout=60)
-        img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            raise RuntimeError("cv2.imdecode returned None (presigned by original_key)")
-        return img, presigned
+        presigned = ensure_presigned_download(key=original_key)
+    else:
+        # пробуем достать ключ из URL и подписать
+        extracted = _extract_key_from_s3_url(original_url)
+        if not extracted:
+            raise RuntimeError("Cannot fetch image: neither original_key provided nor extractable from URL")
+        presigned = ensure_presigned_download(key=extracted)
 
-    # 3) ключа нет — пробуем достать его из URL
-    if original_url:
-        maybe_key = s3_key_from_url(original_url)
-        if maybe_key:
-            presigned = ensure_presigned_download(maybe_key)
-            raw = http_get_bytes(presigned, timeout=60)
-            img = cv2.imdecode(np.frombuffer(raw, np.uint8), np.uint8)
-            img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
-            if img is None:
-                raise RuntimeError("cv2.imdecode returned None (presigned by key from URL)")
-            return img, presigned
+    # теперь качаем уже presigned
+    with httpx.Client(timeout=60.0) as client:
+        r = client.get(presigned)
+        r.raise_for_status()
+        img_bytes = r.content
 
-    raise RuntimeError("No accessible source image: neither URL works nor original_key provided")
+    img_array = np.frombuffer(img_bytes, np.uint8)
+    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+    return img, presigned
 
 def s3_key_from_public_url(url: str) -> Optional[str]:
     """
