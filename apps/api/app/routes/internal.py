@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from typing import Dict, Any, List, Optional
 import boto3
 from datetime import datetime
+from ..store import SKU_FRAMES
 
 # In-memory store из app/store.py
 # Предпочитаем реальные функции, если они есть в store.py
@@ -105,13 +106,20 @@ def _sku_to_int(sku_id_any) -> int:
     raise HTTPException(status_code=422, detail="Invalid sku id format")
 
 @router.get("/sku/{sku_id}/frames")
-def internal_sku_frames(sku_id: str):  # <-- принимаем str
-    sid = _sku_to_int(sku_id)          # <-- приводим к int
-    frames = list_frames_for_sku(sid)
-    # воркеру нужен хотя бы id; остальное можете расширить по желанию
-    return {
-        "frames": [{"id": fid} for fid in frames]
-    }
+def internal_sku_frames(sku_id: str):
+    """
+    Возвращает список кадров для SKU.
+    Поддерживает идентификаторы вида '1' и 'sku_1'.
+    Формат ответа: {"frames": [{"id": <int>}, ...]}
+    """
+    # нормализуем id
+    try:
+        sid = int(str(sku_id).split("_")[-1])   # "sku_1" -> 1
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Bad sku_id")
+
+    ids = list(SKU_FRAMES.get(sid, []))  # если у вас есть list_frames_for_sku(sid), можно вызвать его
+    return {"frames": [{"id": fid} for fid in ids]}
 
 @router.get("/frame/{frame_id}")
 def internal_frame_info(frame_id: str | int):
