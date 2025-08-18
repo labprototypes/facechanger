@@ -19,7 +19,7 @@ const percent = (part: number, total: number) => total ? Math.round((part/total)
 export default function DashboardBatches() {
   const router = useRouter(); // <— добавили
   // load batch summaries
-  const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/+$/, '');
+  const apiBase = (process.env.NEXT_PUBLIC_API_URL || 'https://api-backend-ypst.onrender.com').replace(/\/+$/, '');
   const dashBase = apiBase ? `${apiBase}/api/dashboard` : `/api/dashboard`;
   const { data: batchesResp, error: batchesError, mutate: refetchBatches } = useSWR<{items: BatchSummary[]}>(`${dashBase}/batches`, fetcher, { refreshInterval: 15000 });
   const batches = batchesResp?.items || [];

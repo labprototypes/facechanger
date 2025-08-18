@@ -8,7 +8,9 @@ const SURFACE = "#ffffff";
 const ACCENT = "#B8FF01";
 
 // Публичный URL API (из переменной окружения Render)
-const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/+$/, ''); // '' => relative
+const BACKEND_FALLBACK = 'https://api-backend-ypst.onrender.com';
+const apiBaseEnv = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/+$/, '');
+const apiBase = apiBaseEnv || BACKEND_FALLBACK; // always absolute now
 
 type UploadUrl = { name: string; key: string; put_url: string; public_url: string };
 type Stage = "idle" | "getting" | "uploading" | "submitting" | "done" | "error";
