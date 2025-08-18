@@ -9,19 +9,15 @@ from threading import RLock
 _lock = RLock()
 
 # SKU и кадры
-SKU_BY_CODE: Dict[str, Dict[str, Any]] = {}      # code -> sku record
+SKU_BY_CODE: dict[str, int] = {}
+SKU_FRAMES: dict[int, list[int]] = {}
 SKUS_BY_ID: Dict[str, Dict[str, Any]] = {}       # id -> sku record
 
 FRAMES_BY_ID: Dict[str, Dict[str, Any]] = {}     # frame_id -> frame record
 FRAME_BY_ID = FRAMES_BY_ID                        # алиас, на всякий
 
 # алиас, который ожидают некоторые модули
-FRAMES = FRAMES_BY_ID
-
-# карта, которую импортируют роуты:
-# sku_code -> список frame_id (сохраняем порядок добавления)
-SKU_FRAMES: Dict[str, List[str]] = {}
-
+FRAMES: dict[int, dict] = {}
 # Счётчики id (для dev)
 _sku_counter = count(1)
 _frame_counter = count(1)
@@ -79,11 +75,18 @@ def list_frames_for_sku_id(sku_id: int) -> list[dict]:
         out.append(FRAMES[fid])
     return out
 
-def next_sku_id() -> str:
-    return f"sku_{next(_sku_counter)}"
+def next_sku_id() -> int:
+    global _next_sku_id
+    sid = _next_sku_id
+    _next_sku_id += 1
+    return sid
 
-def next_frame_id() -> str:
-    return f"fr_{next(_frame_counter)}"
+
+def next_frame_id() -> int:
+    global _next_frame_id
+    fid = _next_frame_id
+    _next_frame_id += 1
+    return fid
 
 # ---------------- SKU helpers ----------------
 def get_sku(code: str) -> Optional[Dict[str, Any]]:
@@ -160,8 +163,8 @@ def register_frame(
         "status": status,
     })
 
-def get_frame(frame_id: str) -> Optional[Dict[str, Any]]:
-    return FRAMES_BY_ID.get(frame_id)
+def get_frame(frame_id: int) -> dict | None:
+    return FRAMES.get(frame_id)
 
 def list_frames(sku_code: str) -> List[Dict[str, Any]]:
     """Вернёт кадры SKU в порядке добавления (по SKU_FRAMES). Если по какой-то причине
@@ -173,8 +176,8 @@ def list_frames(sku_code: str) -> List[Dict[str, Any]]:
     return [f for f in FRAMES_BY_ID.values() if f.get("sku") == sku_code]
 
 # ---- Алиас под старый импорт из routes/internal.py ----
-def list_frames_for_sku(sku_code: str) -> List[Dict[str, Any]]:
-    return list_frames(sku_code)
+def list_frames_for_sku(sku_id: int) -> list[int]:
+    return list(SKU_FRAMES.get(sku_id, []))
 
 def set_frame_status(frame_id: str, status: str, **extra: Any) -> Optional[Dict[str, Any]]:
     with _lock:
