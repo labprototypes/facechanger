@@ -1,6 +1,13 @@
 import React, { useState } from "react";
+import { useEffect, useState } from "react";
+import { fetchSkuView, redoFrame } from "@/web/lib/api";
 
 const BG = "#f2f2f2"; const TEXT = "#000000"; const SURFACE = "#ffffff"; const ACCENT = "#B8FF01";
+const { sku } = router.query as { sku: string };
+const [data, setData] = useState<any>(null);
+useEffect(() => {
+  if (sku) fetchSkuView(sku).then(setData).catch(console.error);
+}, [sku]);
 
 function Modal({ open, onClose, children }: { open: boolean; onClose: () => void; children: React.ReactNode }) {
   if (!open) return null;
