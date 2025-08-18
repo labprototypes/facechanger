@@ -1,5 +1,11 @@
-import os, io, time
-from typing import Dict, Any, List
+# apps/worker/worker.py
+# -*- coding: utf-8 -*-
+
+import os
+import io
+import uuid
+from typing import List, Dict, Any, Optional
+from urllib.parse import urlparse
 from celery import Celery
 import httpx
 import numpy as np
@@ -7,22 +13,30 @@ import cv2
 from PIL import Image
 import boto3
 
-# --- ENV ---
+# ======== ENV ========
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
 S3_BUCKET = os.environ["S3_BUCKET"]
 S3_REGION = os.environ.get("S3_REGION")
 S3_ENDPOINT = os.environ.get("S3_ENDPOINT")
 AWS_KEY = os.environ.get("AWS_ACCESS_KEY_ID")
 AWS_SECRET = os.environ.get("AWS_SECRET_ACCESS_KEY")
 
-REPLICATE_TOKEN = os.environ["REPLICATE_API_TOKEN"]
-REPLICATE_MODEL_VERSION = os.environ.get("REPLICATE_MODEL_VERSION")
-API_BASE_URL = os.environ.get("API_BASE_URL")
+API_BASE_URL = os.environ["API_BASE_URL"]  # например: https://api-backend-xxx.onrender.com
 
-MASK_EXPAND_RATIO = float(os.environ.get("MASK_EXPAND_RATIO", "0.06"))
+# Replicate
+REPLICATE_API_TOKEN = os.environ["REPLICATE_API_TOKEN"]
+# важно: используем именно версию модели (owner/model:VERSION -> нам нужна часть после двоеточия)
+REPLICATE_MODEL_VERSION = os.environ["REPLICATE_MODEL_VERSION"]
 
+# Маска: насколько расширять прямоугольник лица (меньше — уже маска)
+MASK_EXPAND_RATIO = float(os.environ.get("MASK_EXPAND_RATIO", "0.06"))  # было 0.10, просили уменьшить
+
+# ======== Celery ========
 celery = Celery("worker", broker=REDIS_URL, backend=REDIS_URL)
 
+
+# ======== S3 helpers ========
 def s3_client():
     return boto3.client(
         "s3",
@@ -32,177 +46,274 @@ def s3_client():
         aws_secret_access_key=AWS_SECRET or None,
     )
 
-def s3_url(key: str) -> str:
+
+def s3_public_url(key: str) -> str:
+    # Универсальная публичная форма (как в бэке)
     return f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
 
-def _download(url: str) -> np.ndarray:
+
+def s3_put_bytes(key: str, data: bytes, content_type: str = "application/octet-stream"):
+    s3_client().put_object(Bucket=S3_BUCKET, Key=key, Body=data, ContentType=content_type)
+    return s3_public_url(key)
+
+
+# ======== IO helpers ========
+def http_get_bytes(url: str, timeout: int = 60) -> bytes:
+    with httpx.Client(timeout=timeout) as c:
+        r = c.get(url)
+        r.raise_for_status()
+        return r.content
+
+
+def http_get_image_bgr(url: str, timeout: int = 60) -> np.ndarray:
+    raw = http_get_bytes(url, timeout=timeout)
+    arr = np.frombuffer(raw, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise RuntimeError("Failed to decode image from bytes")
+    return img
+
+
+def png_bytes_from_array(mask: np.ndarray) -> bytes:
+    pil = Image.fromarray(mask)
+    buf = io.BytesIO()
+    pil.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+# ======== Masking ========
+def _expand_rect(x: int, y: int, w: int, h: int, expand_px: int, W: int, H: int):
+    x2, y2 = x + w, y + h
+    x = max(0, x - expand_px)
+    y = max(0, y - expand_px)
+    x2 = min(W, x2 + expand_px)
+    y2 = min(H, y2 + expand_px)
+    return int(x), int(y), int(x2 - x), int(y2 - y)
+
+
+def make_face_mask(image_bgr: np.ndarray, expand_ratio: float) -> np.ndarray:
+    H, W = image_bgr.shape[:2]
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+
+    # Стандартный каскад лиц из OpenCV
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(64, 64))
+
+    mask = np.zeros((H, W), dtype=np.uint8)
+    if len(faces) == 0:
+        # Фолбек (центр, чтобы не падать): примерно область головы
+        w = int(W * 0.22)
+        h = int(H * 0.32)
+        x = W // 2 - w // 2
+        y = H // 4
+        faces = [(x, y, w, h)]
+
+    for (x, y, w, h) in faces:
+        expand_px = int(W * expand_ratio)  # Жёсткий край — прямоугольник
+        x, y, w, h = _expand_rect(x, y, w, h, expand_px, W, H)
+        mask[y:y + h, x:x + w] = 255
+
+    return mask
+
+
+# ======== Replicate ========
+def replicate_create_prediction(inp: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Создаёт prediction на Replicate. Обязательно передаём version.
+    Возвращает JSON от Replicate (должны быть поля id, status, urls.get).
+    """
+    headers = {
+        "Authorization": f"Token {REPLICATE_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "version": REPLICATE_MODEL_VERSION,
+        "input": inp,
+    }
+    r = httpx.post(
+        "https://api.replicate.com/v1/predictions",
+        headers=headers,
+        json=payload,
+        timeout=60,
+    )
+    if r.status_code >= 400:
+        # Логируем понятную ошибку
+        try:
+            err = r.json()
+        except Exception:
+            err = {"raw": r.text}
+        raise RuntimeError(f"Replicate create error {r.status_code}: {err}")
+    return r.json()
+
+
+def replicate_poll(get_url: str, max_wait_sec: int = 600, step_sec: float = 2.5) -> Dict[str, Any]:
+    """
+    Ждём завершения предикта. Возвращаем финальный JSON.
+    """
+    headers = {"Authorization": f"Token {REPLICATE_API_TOKEN}"}
+    waited = 0.0
+    while True:
+        r = httpx.get(get_url, headers=headers, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        status = data.get("status")
+        if status in ("succeeded", "failed", "canceled"):
+            return data
+        import time
+        time.sleep(step_sec)
+        waited += step_sec
+        if waited >= max_wait_sec:
+            raise TimeoutError("Replicate polling timeout")
+
+
+# ======== Tasks ========
+@celery.task(name="worker.process_sku")
+def process_sku(sku_id: int):
+    """
+    На вход приходит внутренний sku_id (int).
+    Тянем список кадров и ставим их в очередь.
+    """
+    assert API_BASE_URL, "API_BASE_URL env is required"
+    url = f"{API_BASE_URL}/internal/sku/{sku_id}/frames"
     with httpx.Client(timeout=60) as c:
         r = c.get(url)
         r.raise_for_status()
-        img_arr = np.frombuffer(r.content, dtype=np.uint8)
-        return cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
-
-def _to_png_bytes(mask: np.ndarray) -> bytes:
-    if mask.ndim == 3:
-        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-    from PIL import Image
-    buf = io.BytesIO()
-    Image.fromarray(mask.astype(np.uint8)).save(buf, format="PNG")
-    return buf.getvalue()
-
-def _expand_rect(x, y, w, h, expand_px, W, H):
-    x2, y2 = x + w, y + h
-    x = max(0, x - expand_px); y = max(0, y - expand_px)
-    x2 = min(W, x2 + expand_px); y2 = min(H, y2 + expand_px)
-    return int(x), int(y), int(x2 - x), int(y2 - y)
-
-def make_face_mask(image_bgr: np.ndarray, expand_ratio: float = MASK_EXPAND_RATIO) -> np.ndarray:
-    H, W = image_bgr.shape[:2]
-    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(64, 64))
-    mask = np.zeros((H, W), dtype=np.uint8)
-    if len(faces) == 0:
-        w = int(W * 0.22); h = int(H * 0.32)
-        x = W // 2 - w // 2; y = H // 4
-        faces = [(x, y, w, h)]
-    for (x, y, w, h) in faces:
-        expand_px = int(W * expand_ratio)
-        x, y, w, h = _expand_rect(x, y, w, h, expand_px, W, H)
-        mask[y:y+h, x:x+w] = 255
-    return mask
-
-def put_mask_to_s3(key: str, mask_png: bytes):
-    s3_client().put_object(Bucket=S3_BUCKET, Key=key, Body=mask_png, ContentType="image/png")
-    return s3_url(key)
-
-def replicate_predict(input_dict: dict) -> dict:
-    if not REPLICATE_MODEL_VERSION:
-        raise RuntimeError("REPLICATE_MODEL_VERSION env var is required")
-    headers = {
-        "Authorization": f"Token {REPLICATE_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    payload = {"version": REPLICATE_MODEL_VERSION, "input": input_dict}
-    with httpx.Client(timeout=60) as c:
-        r = c.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload)
-        if r.status_code >= 400:
-            try:
-                err = r.json()
-            except Exception:
-                err = {"raw": r.text}
-            raise RuntimeError(f"Replicate API error {r.status_code}: {err}")
-        return r.json()
-
-def replicate_poll(prediction_id: str) -> dict:
-    headers = {"Authorization": f"Token {REPLICATE_TOKEN}"}
-    with httpx.Client(timeout=60) as c:
-        while True:
-            r = c.get(f"https://api.replicate.com/v1/predictions/{prediction_id}", headers=headers)
-            r.raise_for_status()
-            data = r.json()
-            if data.get("status") in ("succeeded", "failed", "canceled"):
-                return data
-            time.sleep(2)
-
-@celery.task(name="worker.process_sku")
-def process_sku(sku_id):
-    if not API_BASE_URL:
-        print("WARN: API_BASE_URL is not set; cannot fetch frames.")
-        return
-
-    # поддерживаем '1' и 'sku_1'
-    sid_str = str(sku_id)
-    if not sid_str.isdigit():
-        sid_str = sid_str.split("_")[-1]
-
-    with httpx.Client(timeout=60) as c:
-        r = c.get(f"{API_BASE_URL}/internal/sku/{sid_str}/frames")
-        r.raise_for_status()
         data = r.json()
 
-    frames_payload = data.get("frames")
-    if frames_payload is None:
-        frames_payload = data.get("items", [])
+    frames = data.get("frames", [])
+    # Лог для отладки: покажем, что кладём в очередь
+    try:
+        print(f"[worker] enqueue frames for sku {sku_id}: {[f.get('id') for f in frames]}")
+    except Exception:
+        print(f"[worker] enqueue frames for sku {sku_id}: {frames}")
 
-    frame_ids: list[int] = []
-    for item in frames_payload:
-        fid_raw = item.get("id") if isinstance(item, dict) else item
-        if fid_raw is None:
-            continue
-        s = str(fid_raw)
-        if not s.isdigit():
-            s = s.split("_")[-1]  # 'fr_1' -> '1'
-        try:
-            frame_ids.append(int(s))
-        except Exception:
-            continue
+    for fr in frames:
+        fid = fr["id"] if isinstance(fr, dict) else int(fr)
+        process_frame.delay(int(fid))
 
-    print(f"[worker] enqueue frames for sku {sku_id} -> internal {sid_str}: {frame_ids}")
-    for fid in frame_ids:
-        process_frame.delay(fid)
 
 @celery.task(name="worker.process_frame")
 def process_frame(frame_id: int):
-    assert API_BASE_URL, "API_BASE_URL required for worker"
+    """
+    Полный пайплайн:
+    - тянем фрейм
+    - скачиваем original_url (если нет — бэк вернёт presigned)
+    - строим маску и грузим её в S3
+    - регистрируем генерацию на бэке
+    - создаём prediction на Replicate, сохраняем prediction_id
+    - ждём завершения и грузим результат(ы) в S3
+    """
+    assert API_BASE_URL, "API_BASE_URL env is required"
 
+    # 1) инфо о фрейме
     with httpx.Client(timeout=60) as c:
         r = c.get(f"{API_BASE_URL}/internal/frame/{frame_id}")
         r.raise_for_status()
         info = r.json()
 
-    sku_code = info["sku"]["code"]
-    original_url = info.get("original_url")
-    original_key = info.get("original_key")
+    sku = info.get("sku") or {}
+    sku_code = str(sku.get("code") or f"sku_{sku.get('id', 'unknown')}")
 
-    if not original_url and original_key:
+    original_url: Optional[str] = info.get("original_url")
+    if not original_url:
+        # Бэк должен был проставить, но подстрахуемся
+        original_key = info.get("original_key")
+        if not original_key:
+            raise RuntimeError("Frame has no original_url or original_key")
         original_url = s3_client().generate_presigned_url(
             "get_object",
             Params={"Bucket": S3_BUCKET, "Key": original_key},
             ExpiresIn=3600,
         )
 
-    mask_key = f"masks/{sku_code}/fr_{frame_id}.png"
-    img = _download(original_url)
+    # 2) маска -> в S3
+    img = http_get_image_bgr(original_url)
     mask = make_face_mask(img, expand_ratio=MASK_EXPAND_RATIO)
-    mask_png = _to_png_bytes(mask)
-    put_mask_to_s3(mask_key, mask_png)
-    mask_url = s3_url(mask_key)
+    mask_png = png_bytes_from_array(mask)
+    mask_key = f"masks/{sku_code}/{frame_id}.png"
+    mask_url = s3_put_bytes(mask_key, mask_png, content_type="image/png")
 
-    token = (info.get("head") or {}).get("trigger_token", "tnkfwm1")
-    tmpl = (info.get("head") or {}).get("prompt_template", "a photo of {token} female model")
-    prompt = tmpl.replace("{token}", token)
+    # 3) промпт (дефолтная "Маша" если профиля нет)
+    head = info.get("head") or {}
+    token = head.get("trigger_token") or "tnkfwm1"
+    tmpl = head.get("prompt_template") or "a photo of {token} female model"
+    prompt = str(tmpl).replace("{token}", token)
 
+    # 4) регистрируем генерацию в бэке
     with httpx.Client(timeout=60) as c:
         reg = c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/generation", json={})
         reg.raise_for_status()
-        gen_id = reg.json()["id"]
+        reg_json = reg.json()
+    generation_id = reg_json.get("id")
+    if not generation_id:
+        raise RuntimeError("internal generation create returned no id")
 
-    input_dict = {
+    # 5) делаем prediction на Replicate
+    # Репликейт: если подадим image/mask + prompt_strength — это img2img/inpaint.
+    inp = {
         "prompt": prompt,
         "image": original_url,
         "mask": mask_url,
         "prompt_strength": 0.8,
         "num_outputs": 3,
-        "num_inference_steps": 28,
-        "guidance_scale": 3,
+        "num_inference_steps": 28,  # для FLUX dev обычно ок
+        "guidance_scale": 3.0,
         "output_format": "png",
+        # можно задать aspect_ratio, но при image+mask игнорируется
+        "disable_safety_checker": True,
     }
-    pred = replicate_predict(input_dict)
-    prediction_id = pred["id"]
 
+    pred = replicate_create_prediction(inp)
+    pred_id = pred.get("id")
+    pred_get = (pred.get("urls") or {}).get("get")
+    if not pred_id or not pred_get:
+        raise RuntimeError(f"Replicate create response missing fields: {pred}")
+
+    # 6) сохраняем prediction_id в бэке
     with httpx.Client(timeout=60) as c:
-        c.post(f"{API_BASE_URL}/internal/generation/{gen_id}/prediction", json={"prediction_id": prediction_id})
+        r = c.post(
+            f"{API_BASE_URL}/internal/generation/{generation_id}/prediction",
+            json={"prediction_id": pred_id},
+        )
+        r.raise_for_status()
 
-    final = replicate_poll(prediction_id)
+    # 7) ждём завершения
+    final = replicate_poll(pred_get)
     status = final.get("status")
-    if status == "succeeded":
-        outputs = final.get("output") or []
-        with httpx.Client(timeout=60) as c:
-            c.post(f"{API_BASE_URL}/internal/generation/{gen_id}/result", json={"urls": outputs})
-    else:
-        with httpx.Client(timeout=60) as c:
-            c.post(
-                f"{API_BASE_URL}/internal/generation/{gen_id}/status",
-                json={"status": status, "error": final.get("error")},
+    if status != "succeeded":
+        # логируем причину и выходим
+        print(f"[worker] replicate prediction {pred_id} finished with status={status}, detail={final}")
+        return
+
+    # 8) выгружаем результаты в S3
+    outputs: List[str] = []
+    # У Replicate чаще всего 'output' — массив URL'ов
+    raw_outputs = final.get("output") or []
+    if not isinstance(raw_outputs, list):
+        raw_outputs = [raw_outputs] if raw_outputs else []
+
+    for i, out_url in enumerate(raw_outputs):
+        try:
+            content = http_get_bytes(out_url, timeout=120)
+            # определим расширение по URL (если нет — png)
+            parsed = urlparse(out_url)
+            name = os.path.basename(parsed.path) or f"out_{i}.png"
+            ext = os.path.splitext(name)[1].lower() or ".png"
+            if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+                ext = ".png"
+            key = f"outputs/{sku_code}/{frame_id}/{pred_id[:8]}_{i}{ext}"
+            # грубая эвристика контента
+            ctype = (
+                "image/png" if ext == ".png"
+                else "image/jpeg" if ext in (".jpg", ".jpeg")
+                else "image/webp" if ext == ".webp"
+                else "application/octet-stream"
             )
+            url = s3_put_bytes(key, content, content_type=ctype)
+            outputs.append(url)
+        except Exception as e:
+            print(f"[worker] failed to upload output {i} to S3: {e}")
+
+    print(f"[worker] frame {frame_id}: uploaded {len(outputs)} outputs to S3")
+    # Здесь можно было бы дернуть ручку для сохранения outputs в store,
+    # но в текущем internal такой ручки нет. Файлы уже доступны по URL.
