@@ -26,6 +26,59 @@ SKU_FRAMES: Dict[str, List[str]] = {}
 _sku_counter = count(1)
 _frame_counter = count(1)
 
+# ---------------- Generations store ----------------
+# gen_id -> { id, frame_id, status, params, prediction_id, result_urls }
+GENERATIONS = {}
+
+GEN_SEQ = 1
+def next_gen_id() -> str:
+    global GEN_SEQ
+    gid = f"gen_{GEN_SEQ}"
+    GEN_SEQ += 1
+    return gid
+
+def register_generation(frame_id: int, params: dict | None = None) -> dict:
+    g = {
+        "id": next_gen_id(),
+        "frame_id": frame_id,
+        "status": "queued",
+        "params": params or {},
+        "prediction_id": None,
+        "result_urls": [],
+    }
+    GENERATIONS[g["id"]] = g
+    FRAMES[frame_id].setdefault("generations", []).append(g["id"])
+    return g
+
+def set_generation_prediction(gen_id: str, prediction_id: str):
+    if gen_id in GENERATIONS:
+        GENERATIONS[gen_id]["prediction_id"] = prediction_id
+
+def add_generation_results(gen_id: str, urls: list[str]):
+    if gen_id not in GENERATIONS:
+        return
+    GENERATIONS[gen_id]["result_urls"].extend(urls)
+    fid = GENERATIONS[gen_id]["frame_id"]
+    FRAMES[fid].setdefault("variants", [])
+    for u in urls:
+        FRAMES[fid]["variants"].append({"url": u, "gen_id": gen_id})
+
+def set_generation_status(gen_id: str, status: str, error: str | None = None):
+    if gen_id in GENERATIONS:
+        GENERATIONS[gen_id]["status"] = status
+        if error:
+            GENERATIONS[gen_id]["error"] = error
+
+def set_frame_mask_key(frame_id: int, key: str):
+    if frame_id in FRAMES:
+        FRAMES[frame_id]["mask_key"] = key
+
+def list_frames_for_sku_id(sku_id: int) -> list[dict]:
+    out = []
+    for fid in SKU_FRAMES.get(sku_id, []):
+        out.append(FRAMES[fid])
+    return out
+
 def next_sku_id() -> str:
     return f"sku_{next(_sku_counter)}"
 
