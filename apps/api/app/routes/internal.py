@@ -317,6 +317,8 @@ def internal_generation_complete(generation_id: int, body: _GenerationCompleteBo
         if frame_id is not None:
             try:
                 set_frame_outputs(int(frame_id), norm)
+                # статус кадра -> done
+                set_frame_status(int(frame_id), "done")
             except Exception:
                 pass
     except Exception as e:
@@ -342,6 +344,58 @@ def internal_list_generations(frame_id: int):
     if not isinstance(gens, list):
         gens = []
     return {"items": gens}
+
+
+@router.post("/frame/{frame_id}/redo")
+def internal_redo_frame(frame_id: int):
+    """Пере-запустить генерацию по кадру.
+    Сбрасываем outputs и статус, ставим задачу process_frame."""
+    fr = get_frame(int(frame_id))
+    if not fr:
+        raise HTTPException(status_code=404, detail="frame not found")
+    # очистим outputs в frame и generations (мягко)
+    try:
+        fr.pop("outputs", None)
+        set_frame_status(int(frame_id), "queued")
+    except Exception:
+        pass
+    # (генерации не трогаем для истории)
+    # enqueue
+    try:
+        from ..celery_client import queue_process_frame
+        queue_process_frame(int(frame_id))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"enqueue failed: {e}")
+    return {"ok": True, "frame_id": int(frame_id)}
+
+
+@router.get("/sku/by-code/{code}/export-urls")
+def internal_export_urls(code: str):
+    """Вернёт плоский список всех output URL по SKU (для копирования)."""
+    from ..store import SKU_BY_CODE
+    if code not in SKU_BY_CODE:
+        raise HTTPException(status_code=404, detail="sku not found")
+    sid = SKU_BY_CODE[code]
+    frames = list_frames_for_sku(sid) or []
+    urls: list[str] = []
+    for fr in frames:
+        outs = fr.get("outputs") or []
+        for o in outs:
+            if isinstance(o, dict):
+                u = o.get("url") or None
+                if not u:
+                    key = o.get("key")
+                    if key:
+                        u = _s3_public_url(key)
+                if u:
+                    urls.append(u)
+            elif isinstance(o, str):
+                # предполагаем это ключ
+                if "://" in o:
+                    urls.append(o)
+                else:
+                    urls.append(_s3_public_url(o))
+    return {"sku": code, "count": len(urls), "urls": urls}
 
 
 # =============================================================================

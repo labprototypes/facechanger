@@ -21,7 +21,7 @@ function Modal({ open, onClose, children }: { open: boolean; onClose: () => void
   );
 }
 
-function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex: number, frame: any) => void }) {
+function FrameCard({ frame, onPreview, onRedo }: { frame: any; onPreview: (variantIndex: number, frame: any) => void; onRedo: (frameId:number)=>void }) {
   const [mode, setMode] = useState<"view"|"tune"|"rerun">("view");
   const [accepted, setAccepted] = useState(false);
   const [showMask, setShowMask] = useState(false);
@@ -80,6 +80,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
         <button onClick={() => setAccepted(true)} className="px-3 py-1 rounded-lg text-sm font-medium" style={{ background: ACCENT }}>Принять</button>
         {mode !== 'tune' && (<button onClick={()=>setMode('tune')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Доработать</button>)}
         {mode !== 'rerun' && (<button onClick={()=>setMode('rerun')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Переделать</button>)}
+        <button onClick={()=>onRedo(frame.id)} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Redo</button>
       </div>
     </div>
   );
@@ -94,8 +95,16 @@ export default function SkuPage() {
   const [auto, setAuto] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewCtx, setPreviewCtx] = useState<{ frame: any; variant: number }|null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportUrls, setExportUrls] = useState<string[] | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const allDone = useMemo(() => (data?.frames?.length ? data.frames.every((f:any)=>f.outputs && f.outputs.length>0) : false), [data]);
+  const progressPct = useMemo(()=>{
+    if (!data?.frames?.length) return 0;
+    const done = data.frames.filter((f:any)=>f.outputs && f.outputs.length>0).length;
+    return Math.round((done / data.frames.length) * 100);
+  }, [data]);
 
   const load = () => {
     if (!sku) return;
@@ -119,6 +128,30 @@ export default function SkuPage() {
     setPreviewOpen(true);
   };
 
+  const redoFrame = async (frameId: number) => {
+    try {
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frameId}/redo`, { method: 'POST' });
+      load();
+    } catch(e) { console.error(e); }
+  };
+
+  const exportAll = async () => {
+    if (!sku) return;
+    setExporting(true);
+    try {
+      const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/sku/by-code/${sku}/export-urls`);
+      const j = await r.json();
+      setExportUrls(j.urls || []);
+      setCopied(false);
+    } catch(e) { console.error(e); }
+    finally { setExporting(false); }
+  };
+
+  const copyAll = async () => {
+    if (!exportUrls) return;
+    try { await navigator.clipboard.writeText(exportUrls.join('\n')); setCopied(true); setTimeout(()=>setCopied(false), 2000); } catch(e){ console.error(e);}  
+  };
+
   return (
     <div className="min-h-screen" style={{ background: BG, color: TEXT }}>
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
@@ -130,6 +163,12 @@ export default function SkuPage() {
           <div className="flex items-center gap-4 text-sm">
             <button onClick={load} className="px-3 py-1 rounded-lg border" style={{ background: SURFACE }}>Обновить</button>
             <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)} /> авто</label>
+            <div className="w-40 h-2 bg-black/10 rounded-full overflow-hidden">
+              <div className="h-full bg-lime-400 transition-all" style={{ width: `${progressPct}%` }} />
+            </div>
+            <span className="text-xs opacity-70 w-10 text-right">{progressPct}%</span>
+            <button onClick={exportAll} className="px-3 py-1 rounded-lg border text-xs" style={{ background: SURFACE }}>{exporting? '...' : 'Экспорт URL'}</button>
+            {exportUrls && <button onClick={copyAll} className="px-3 py-1 rounded-lg border text-xs" style={{ background: copied? ACCENT : SURFACE }}>{copied? 'Скопировано' : 'Копировать'}</button>}
             {allDone && <span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Готово</span>}
           </div>
         </div>
@@ -140,7 +179,7 @@ export default function SkuPage() {
         {data && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.frames.map((fr:any) => (
-              <FrameCard key={fr.id} frame={fr} onPreview={(v,frame)=>openPreview(v,frame)} />
+              <FrameCard key={fr.id} frame={fr} onPreview={(v,frame)=>openPreview(v,frame)} onRedo={redoFrame} />
             ))}
           </div>
         )}
