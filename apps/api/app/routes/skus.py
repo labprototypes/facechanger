@@ -76,6 +76,9 @@ def submit_sku(sku_code: str, body: SubmitReq):
     frame_ids = []
     for it in body.items:
         fid = next_frame_id()
+        head_id = body.get("head_id")  # может быть None
+        sku["head_id"] = head_id
+        store.SKUS_BY_CODE[code] = sku
         frame_ids.append(fid)
         FRAMES[fid] = {
             "id": fid,
