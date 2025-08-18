@@ -157,6 +157,9 @@ def process_frame(frame_id: int):
     mask_key = f"masks/{sku_code}/{frame_id}.png"
     put_bytes(mask_key, mask_png, "image/png")
     mask_url = s3_presigned_get(mask_key, 3600)  # <<< КЛЮЧЕВАЯ ПРАВКА (был публичный URL)
+    # сообщаем бэкенду, где лежит маска
+    with httpx.Client(timeout=30) as c:
+        c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/mask", json={"mask_key": mask_key})
 
     # 4) собираем промпт по профилю головы (дефолт «Маша»)
     head = info.get("head") or {}
@@ -183,9 +186,25 @@ def process_frame(frame_id: int):
     }
     pred = replicate_predict(input_dict)
 
-    # 7) сохраняем prediction_id на бэке
+    # --- ждём завершения у Replicate и сохраняем результаты ---
+    pred_id = pred["id"]
     with httpx.Client(timeout=60) as c:
-        c.post(
-            f"{API_BASE_URL}/internal/generation/{gen_id}/prediction",
-            json={"prediction_id": pred["id"]},
-        )
+        # опрашиваем до готовности
+        while True:
+            pr = c.get(f"https://api.replicate.com/v1/predictions/{pred_id}",
+                       headers={"Authorization": f"Token {REPLICATE_TOKEN}"} )
+            pr.raise_for_status()
+            pj = pr.json()
+            st = pj.get("status")
+            if st in ("succeeded", "failed", "canceled"):
+                break
+            time.sleep(2)
+    
+        if st == "succeeded":
+            urls = pj.get("output") or []
+            # сохраняем в бекенд
+            c.post(f"{API_BASE_URL}/internal/generation/{gen_id}/result", json={"urls": urls})
+            c.post(f"{API_BASE_URL}/internal/generation/{gen_id}/status", json={"status": "completed"})
+        else:
+            c.post(f"{API_BASE_URL}/internal/generation/{gen_id}/status",
+                   json={"status": "failed", "error": pj.get("error")})
