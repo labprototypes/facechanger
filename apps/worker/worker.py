@@ -106,39 +106,42 @@ def replicate_poll(prediction_id: str) -> dict:
             time.sleep(2)
 
 @celery.task(name="worker.process_sku")
-def process_sku(sku_id: int):
+def process_sku(sku_id):
     if not API_BASE_URL:
         print("WARN: API_BASE_URL is not set; cannot fetch frames.")
         return
 
+    # --- Нормализуем sku_id: поддерживаем '1' и 'sku_1'
+    sid_str = str(sku_id)
+    if not sid_str.isdigit():
+        sid_str = sid_str.split("_")[-1]  # 'sku_1' -> '1'
+
     # 1) тянем список кадров
     with httpx.Client(timeout=60) as c:
-        r = c.get(f"{API_BASE_URL}/internal/sku/{sku_id}/frames")
+        r = c.get(f"{API_BASE_URL}/internal/sku/{sid_str}/frames")
         r.raise_for_status()
         data = r.json()
 
-    # 2) нормализуем payload: поддерживаем {"frames":[{"id":1}, ...]},
-    #    {"frames":[1,2,...]} и {"items":[...]}
+    # 2) поддерживаем разные форматы ответа: {"frames":[...]} или {"items":[...]}
     frames_payload = data.get("frames")
     if frames_payload is None:
         frames_payload = data.get("items", [])
 
     frame_ids: list[int] = []
     for item in frames_payload:
-        if isinstance(item, dict):
-            fid = item.get("id") or item.get("frame_id") or item.get("frameId")
-        else:
-            fid = item
-        if fid is None:
+        # элемент может быть dict или просто id/строка
+        fid_raw = item.get("id") if isinstance(item, dict) else item
+        if fid_raw is None:
             continue
-        s = str(fid)
+        s = str(fid_raw)
+        if not s.isdigit():
+            s = s.split("_")[-1]  # 'fr_1' -> '1'
         try:
-            fid_int = int(s.split("_")[-1])  # допускаем "fr_1"
+            frame_ids.append(int(s))
         except Exception:
             continue
-        frame_ids.append(fid_int)
 
-    print(f"[worker] enqueue frames for sku {sku_id}: {frame_ids}")
+    print(f"[worker] enqueue frames for sku {sku_id} -> internal {sid_str}: {frame_ids}")
     for fid in frame_ids:
         process_frame.delay(fid)
 
