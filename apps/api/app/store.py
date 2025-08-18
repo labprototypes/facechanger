@@ -153,6 +153,40 @@ def set_frame_outputs(frame_id: int, outputs: List[str]) -> None:
             fr["outputs"] = list(outputs)
             fr["updated_at"] = _now()
 
+def append_frame_outputs_version(frame_id: int, outputs: List[str]) -> None:
+    """Append a new outputs version (list of keys) keeping prior generations.
+    Maintains flattened fr['outputs'] for backward compatibility and a
+    structured fr['outputs_versions'] = [ [keys_v1], [keys_v2], ... ]."""
+    with _lock:
+        fr = FRAMES_BY_ID.get(int(frame_id))
+        if fr is None:
+            return
+        vers = fr.setdefault("outputs_versions", [])
+        # if fr already has outputs but no versions, seed versions with that list
+        if not vers and fr.get("outputs"):
+            vers.append(list(fr["outputs"]))
+        vers.append(list(outputs))
+        # rebuild flattened outputs (latest aggregate)
+        flat: List[str] = []
+        for v in vers:
+            flat.extend(v)
+        fr["outputs"] = flat
+        fr["updated_at"] = _now()
+
+def set_frame_mask(frame_id: int, mask_key: str) -> None:
+    with _lock:
+        fr = FRAMES_BY_ID.get(int(frame_id))
+        if fr is not None:
+            fr["mask_key"] = mask_key
+            fr["updated_at"] = _now()
+
+def set_frame_pending_params(frame_id: int, params: Dict[str, Any]) -> None:
+    with _lock:
+        fr = FRAMES_BY_ID.get(int(frame_id))
+        if fr is not None:
+            fr.setdefault("pending_params", {}).update(params)
+            fr["updated_at"] = _now()
+
 # backward name used earlier
 mark_frame_status = set_frame_status
 

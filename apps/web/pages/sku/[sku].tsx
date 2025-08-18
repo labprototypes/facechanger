@@ -21,11 +21,18 @@ function Modal({ open, onClose, children }: { open: boolean; onClose: () => void
   );
 }
 
-function FrameCard({ frame, onPreview, onRedo }: { frame: any; onPreview: (variantIndex: number, frame: any) => void; onRedo: (frameId:number)=>void }) {
+function FrameCard({ frame, onPreview, onRedo, onRegenerate }: { frame: any; onPreview: (variantIndex: number, frame: any) => void; onRedo: (frameId:number)=>void; onRegenerate: (frameId:number, params:any)=>void }) {
   const [mode, setMode] = useState<"view"|"tune"|"rerun">("view");
   const [accepted, setAccepted] = useState(false);
   const [showMask, setShowMask] = useState(false);
+  const [prompt, setPrompt] = useState(frame.pending_params?.prompt || "");
+  const [promptStrength, setPromptStrength] = useState(frame.pending_params?.prompt_strength ?? 0.8);
+  const [steps, setSteps] = useState(frame.pending_params?.num_inference_steps ?? 28);
+  const [guidanceScale, setGuidanceScale] = useState(frame.pending_params?.guidance_scale ?? 3);
+  const [numOutputs, setNumOutputs] = useState(frame.pending_params?.num_outputs ?? 3);
+  const [format, setFormat] = useState(frame.pending_params?.output_format || 'png');
   const outs = frame.outputs || [];
+  const versions = frame.outputs_versions || [];
   const original = frame.original_url;
   const maskUrl = frame.mask_url;
 
@@ -55,31 +62,57 @@ function FrameCard({ frame, onPreview, onRedo }: { frame: any; onPreview: (varia
       </div>
 
       {mode === "view" && (
-        <div className="grid grid-cols-3 gap-2 mb-3">
-          {outs.length === 0 && <div className="col-span-3 text-xs opacity-60 italic">Ждём результаты…</div>}
-          {outs.map((o: any, idx: number) => (
-            <button key={idx} onClick={() => onPreview(idx, frame)} className="aspect-square bg-black/5 rounded overflow-hidden flex items-center justify-center hover:opacity-80 border">
-              <img src={o.url || o} alt={`v${idx+1}`} className="object-cover w-full h-full" />
-            </button>
-          ))}
+        <div className="mb-3 flex flex-col gap-3">
+          {versions.length > 0 ? versions.map((vers: any[], vi: number) => (
+            <div key={vi}>
+              <div className="text-[11px] opacity-60 mb-1">Версия V{vi+1}</div>
+              <div className="grid grid-cols-3 gap-2">
+                {vers.map((o: any, idx: number) => (
+                  <button key={idx} onClick={() => onPreview(idx, frame)} className="aspect-square bg-black/5 rounded overflow-hidden flex items-center justify-center hover:opacity-80 border">
+                    <img src={o.url || o} alt={`v${vi+1}-${idx+1}`} className="object-cover w-full h-full" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )) : (
+            <div className="grid grid-cols-3 gap-2">
+              {outs.length === 0 && <div className="col-span-3 text-xs opacity-60 italic">Ждём результаты…</div>}
+              {outs.map((o: any, idx: number) => (
+                <button key={idx} onClick={() => onPreview(idx, frame)} className="aspect-square bg-black/5 rounded overflow-hidden flex items-center justify-center hover:opacity-80 border">
+                  <img src={o.url || o} alt={`v${idx+1}`} className="object-cover w-full h-full" />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {mode !== "view" && (
-        <div className="rounded-xl border border-black/10 p-3 mb-3" style={{ background: SURFACE }}>
-          {mode === 'tune' && (
-            <div className="text-xs opacity-70">(UI параметров генерации будет подключен позже)</div>
-          )}
-          {mode === 'rerun' && (
-            <div className="text-xs opacity-70">(UI для повторного запуска появится позже)</div>
-          )}
+        <div className="rounded-xl border border-black/10 p-3 mb-3 flex flex-col gap-3" style={{ background: SURFACE }}>
+          <div className="grid grid-cols-1 gap-3">
+            <div>
+              <label className="text-xs font-medium">Prompt</label>
+              <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={2} className="mt-1 w-full text-xs p-2 rounded border" style={{ background: SURFACE }} />
+            </div>
+            <div className="grid grid-cols-5 gap-2 text-xs">
+              <div><label className="block">Strength</label><input type="number" step="0.01" min={0.1} max={1} value={promptStrength} onChange={e=>setPromptStrength(parseFloat(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
+              <div><label className="block">Steps</label><input type="number" min={8} max={80} value={steps} onChange={e=>setSteps(parseInt(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
+              <div><label className="block">Guidance</label><input type="number" step="0.1" min={1} max={15} value={guidanceScale} onChange={e=>setGuidanceScale(parseFloat(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
+              <div><label className="block">Outputs</label><input type="number" min={1} max={6} value={numOutputs} onChange={e=>setNumOutputs(parseInt(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
+              <div><label className="block">Format</label><select value={format} onChange={e=>setFormat(e.target.value)} className="mt-1 w-full p-1 rounded border"><option value="png">png</option><option value="webp">webp</option><option value="jpeg">jpeg</option></select></div>
+            </div>
+          </div>
+          <div className="flex gap-2 flex-wrap text-xs">
+            <button onClick={()=>{ onRegenerate(frame.id, { prompt, prompt_strength: promptStrength, num_inference_steps: steps, guidance_scale: guidanceScale, num_outputs: numOutputs, output_format: format }); setMode('view'); }} className="px-3 py-1 rounded-lg font-medium" style={{ background: ACCENT }}>Запустить</button>
+            <button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg border" style={{ background: SURFACE }}>Отмена</button>
+          </div>
         </div>
       )}
 
       <div className="flex flex-wrap gap-2">
         <button onClick={() => setAccepted(true)} className="px-3 py-1 rounded-lg text-sm font-medium" style={{ background: ACCENT }}>Принять</button>
-        {mode !== 'tune' && (<button onClick={()=>setMode('tune')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Доработать</button>)}
-        {mode !== 'rerun' && (<button onClick={()=>setMode('rerun')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Переделать</button>)}
+        {mode !== 'tune' && (<button onClick={()=>setMode('tune')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Настроить</button>)}
+        {mode === 'tune' && (<button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Просмотр</button>)}
         <button onClick={()=>onRedo(frame.id)} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Redo</button>
       </div>
     </div>
@@ -135,6 +168,13 @@ export default function SkuPage() {
     } catch(e) { console.error(e); }
   };
 
+  const redoFrameWithParams = async (frameId: number, params: any) => {
+    try {
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frameId}/redo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
+      load();
+    } catch(e) { console.error(e); }
+  };
+
   const exportAll = async () => {
     if (!sku) return;
     setExporting(true);
@@ -179,7 +219,7 @@ export default function SkuPage() {
         {data && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {data.frames.map((fr:any) => (
-              <FrameCard key={fr.id} frame={fr} onPreview={(v,frame)=>openPreview(v,frame)} onRedo={redoFrame} />
+              <FrameCard key={fr.id} frame={fr} onPreview={(v,frame)=>openPreview(v,frame)} onRedo={redoFrame} onRegenerate={(id, params)=>redoFrameWithParams(id, params)} />
             ))}
           </div>
         )}

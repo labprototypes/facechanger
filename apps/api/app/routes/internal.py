@@ -39,6 +39,7 @@ from ..store import (
     generations_for_frame,       # (frame_id: int) -> List[dict]
     set_generation_outputs,      # (generation_id: int, outputs: List[str]) -> None
     set_frame_outputs,            # (frame_id: int, outputs: List[str]) -> None
+    append_frame_outputs_version, # (frame_id: int, outputs: List[str]) -> None
 )
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -204,7 +205,19 @@ def internal_sku_view_by_code(code: str):
         raise HTTPException(status_code=404, detail="sku not found")
     sid = SKU_BY_CODE[code]
     frames = list_frames_for_sku(sid) or []
-    items = [_frame_to_public_json(fr) for fr in frames]
+    items = []
+    for fr in frames:
+        obj = _frame_to_public_json(fr)
+        # добавим версионность если есть
+        if fr.get("outputs_versions"):
+            obj["outputs_versions"] = []
+            for vers in fr["outputs_versions"]:
+                obj["outputs_versions"].append([
+                    _s3_public_url(k) if not S3_REQUIRE_SIGNED else _best_url_for_key(k) for k in vers
+                ])
+        if fr.get("pending_params"):
+            obj["pending_params"] = fr.get("pending_params")
+        items.append(obj)
     return {"sku": {"id": sid, "code": code}, "frames": items}
 
 @router.get("/internal/s3/presign-get")
@@ -289,6 +302,14 @@ class _GenerationCompleteBody(BaseModel):
     status: str | None = None
     error: str | None = None
 
+class _RedoBody(BaseModel):
+    prompt: str | None = None
+    prompt_strength: float | None = None
+    num_inference_steps: int | None = None
+    guidance_scale: float | None = None
+    output_format: str | None = None
+    num_outputs: int | None = None
+
 
 @router.post("/generation/{generation_id}/prediction")
 def internal_set_prediction(generation_id: int, body: _PredictionBody):
@@ -325,7 +346,8 @@ def internal_generation_complete(generation_id: int, body: _GenerationCompleteBo
         frame_id = gen_rec.get("frame_id")
         if frame_id is not None:
             try:
-                set_frame_outputs(int(frame_id), norm)
+                # добавляем новой версией
+                append_frame_outputs_version(int(frame_id), norm)
                 # статус кадра -> done
                 set_frame_status(int(frame_id), "done")
             except Exception:
@@ -356,26 +378,27 @@ def internal_list_generations(frame_id: int):
 
 
 @router.post("/frame/{frame_id}/redo")
-def internal_redo_frame(frame_id: int):
+def internal_redo_frame(frame_id: int, body: _RedoBody):
     """Пере-запустить генерацию по кадру.
-    Сбрасываем outputs и статус, ставим задачу process_frame."""
+    НЕ удаляем прошлые outputs (они уже в outputs_versions), просто ставим статус queued.
+    Параметры из body сохраняем как pending_params чтобы воркер использовал их при следующем запуске."""
     fr = get_frame(int(frame_id))
     if not fr:
         raise HTTPException(status_code=404, detail="frame not found")
-    # очистим outputs в frame и generations (мягко)
-    try:
-        fr.pop("outputs", None)
-        set_frame_status(int(frame_id), "queued")
-    except Exception:
-        pass
-    # (генерации не трогаем для истории)
+    # статус -> queued
+    set_frame_status(int(frame_id), "queued")
+    # сохраним параметры для воркера
+    from ..store import set_frame_pending_params
+    params = {k: v for k, v in body.dict().items() if v is not None}
+    if params:
+        set_frame_pending_params(int(frame_id), params)
     # enqueue
+    from ..celery_client import queue_process_frame
     try:
-        from ..celery_client import queue_process_frame
         queue_process_frame(int(frame_id))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"enqueue failed: {e}")
-    return {"ok": True, "frame_id": int(frame_id)}
+    return {"ok": True, "frame_id": int(frame_id), "params": params}
 
 
 @router.get("/sku/by-code/{code}/export-urls")

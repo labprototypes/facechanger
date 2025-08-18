@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from datetime import datetime
 from typing import Dict, Any, List
 from ..store import SKUS_BY_ID, SKU_FRAMES, FRAMES_BY_ID, FRAME_GENERATIONS, GENERATIONS_BY_ID, list_frames_for_sku, SKU_BY_CODE
+from .internal import _s3_public_url, _s3_signed_get, S3_REQUIRE_SIGNED, S3_BUCKET
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -71,10 +72,19 @@ def sku_view(code: str):
     for fr in frames:
         gens_ids = FRAME_GENERATIONS.get(fr["id"], [])
         gens = [GENERATIONS_BY_ID.get(g) for g in gens_ids if g in GENERATIONS_BY_ID]
+        mask_key = fr.get("mask_key")
+        mask_url = None
+        if mask_key:
+            try:
+                mask_url = _s3_signed_get(mask_key) if S3_REQUIRE_SIGNED else _s3_public_url(mask_key)
+            except Exception:
+                pass
         frame_views.append({
             "id": fr["id"],
             "status": fr.get("status"),
             "original_key": fr.get("original_key"),
+            "mask_key": mask_key,
+            "mask_url": mask_url,
             "generations": gens,
         })
     return {"sku": {"id": sid, "code": code}, "frames": frame_views}
