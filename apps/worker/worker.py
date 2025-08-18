@@ -95,7 +95,7 @@ def make_face_mask(image_bgr: np.ndarray, expand_ratio: float = 0.10) -> np.ndar
         y = H // 4
         faces = [(x, y, w, h)]
     for (x, y, w, h) in faces:
-        expand_px = int(W * expand_ratio)
+        expand_px = int(max(w, h) * expand_ratio)
         x, y, w, h = _expand_rect(x, y, w, h, expand_px, W, H)
         mask[y : y + h, x : x + w] = 255
     return mask
@@ -152,7 +152,7 @@ def process_frame(frame_id: int):
 
     # 3) делаем маску и кладём в S3 (объект приватный), берём presigned GET для Replicate
     img = _download(original_url)
-    mask = make_face_mask(img, expand_ratio=0.10)
+    mask = make_face_mask(img, expand_ratio=0.20)
     mask_png = _to_png_bytes(mask)
     mask_key = f"masks/{sku_code}/{frame_id}.png"
     put_bytes(mask_key, mask_png, "image/png")
