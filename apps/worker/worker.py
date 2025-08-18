@@ -45,7 +45,6 @@ def s3_client():
 
 # --- S3: upload mask helper ---
 def put_mask_to_s3(key: str, data: bytes) -> str:
-    # Загружаем PNG байты в S3 и возвращаем публичный URL (для presign уже ниже)
     s3_client().put_object(
         Bucket=S3_BUCKET,
         Key=key,
@@ -214,29 +213,33 @@ def replicate_poll(get_url: str, max_wait_sec: int = 600, step_sec: float = 2.5)
 
 
 # ======== Helpers: fetch original with presign fallback ========
-def fetch_source_image_bgr(original_url: str, original_key: Optional[str]) -> np.ndarray:
+def fetch_source_image_bgr(original_url: str | None, original_key: str | None):
     """
-    Сначала пробуем скачать original_url.
-    Если 401/403/404 и нет original_key — пробуем извлечь key из URL.
-    Затем делаем presigned GET и повторяем скачивание.
+    Качаем исходник. Если прямой URL даёт 403 — пробуем presigned по ключу.
+    Возвращаем кортеж: (img_bgr, url_который_фактически_использовали)
     """
-    try:
-        return http_get_image_bgr(original_url)
-    except httpx.HTTPStatusError as e:
-        code = e.response.status_code if e.response is not None else None
-        if code in (401, 403, 404):
-            key = original_key or s3_key_from_public_url(original_url)
-            if key:
-                presigned = s3_client().generate_presigned_url(
-                    "get_object",
-                    Params={"Bucket": S3_BUCKET, "Key": key},
-                    ExpiresIn=3600,
-                )
-                # лог для отладки
-                print(f"[worker] S3 {code} on direct URL — retry with presigned for key={key}")
-                return http_get_image_bgr(presigned)
-        # если сюда дошли — фолбэк невозможен
-        raise
+    # 1) пробуем прямой URL, если он есть
+    if original_url:
+        try:
+            raw = http_get_bytes(original_url, timeout=60)
+            img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                raise RuntimeError("cv2.imdecode returned None")
+            return img, original_url
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 403:
+                raise
+
+    # 2) если есть ключ — генерим presigned и качаем
+    if original_key:
+        presigned = ensure_presigned_download(original_key)
+        raw = http_get_bytes(presigned, timeout=60)
+        img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            raise RuntimeError("cv2.imdecode returned None from presigned")
+        return img, presigned
+
+    raise RuntimeError("No accessible source image: neither URL works nor original_key provided")
 
 def s3_key_from_public_url(url: str) -> Optional[str]:
     """
@@ -345,7 +348,7 @@ def process_frame(frame_id: int):
 
     # 2) маска -> в S3 (с фолбэком presigned при необходимости)
     mask_key = f"masks/{sku_code}/{frame_id}.png"
-    img = fetch_source_image_bgr(original_url, original_key)
+    img, source_image_url = fetch_source_image_bgr(original_url, original_key)
     mask = make_face_mask(img, expand_ratio=0.10)
     mask_png = _to_png_bytes(mask)
     put_mask_to_s3(mask_key, mask_png)
