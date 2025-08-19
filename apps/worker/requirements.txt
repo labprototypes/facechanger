@@ -7,4 +7,4 @@ numpy==1.26.4
 Pillow==10.4.0
 python-dotenv==1.1.1
 ultralytics==8.2.52
-mediapipe==0.10.14
+mediapipe==0.10.14; python_version < "3.13"
