@@ -199,13 +199,7 @@ def internal_health():
     """Простая проверка живости сервиса"""
     return {"ok": True}
 
-@router.post("/webhooks/replicate")
-async def webhook_replicate(payload: dict, request: Request):
-    """Replicate webhook stub (путь /api/webhooks/replicate)."""
-    event_status = payload.get("status")
-    prediction_id = payload.get("id")
-    print(f"[webhook] replicate event status={event_status} id={prediction_id}")
-    return {"ok": True}
+## Public webhook now handled in routes/webhooks.py
 
 @router.get("/sku/by-code/{code}/view")
 def internal_sku_view_by_code(code: str):
