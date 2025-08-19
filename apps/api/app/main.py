@@ -6,6 +6,8 @@ from .routes.internal import router as internal_router
 from .routes.dashboard import router as dashboard_router
 from .routes.webhooks import router as webhooks_router
 from .store import HEADS, create_head
+from .database import init_db, get_session
+from . import models
 
 
 app = FastAPI()
@@ -77,4 +79,41 @@ def _seed_heads():
                 else:
                     params.setdefault(k, v)
 
-_seed_heads()
+try:
+    init_db()
+except Exception as e:
+    print(f"[startup] DB init failed: {e}")
+
+def _seed_heads_db():
+    from sqlalchemy import select
+    sess = get_session()
+    try:
+        existing = {h.trigger_token: h for h in sess.execute(select(models.HeadProfile)).scalars().all()}
+        for h in PREDEFINED_HEADS:
+            trig = h["trigger"]
+            if trig in existing:
+                # update params if missing fields
+                hp = existing[trig]
+                params = hp.params or {}
+                changed = False
+                for k,v in h["params"].items():
+                    if k not in params or (k == "num_inference_steps" and params.get(k) != v):
+                        params[k] = v
+                        changed = True
+                if changed:
+                    hp.params = params
+                    sess.add(hp)
+            else:
+                sess.add(models.HeadProfile(
+                    name=h["name"],
+                    replicate_model=h["model_version"],
+                    trigger_token=trig,
+                    prompt_template="a photo of {token} female model",
+                    params=h["params"],
+                ))
+        sess.commit()
+    finally:
+        sess.close()
+
+_seed_heads()  # legacy in-memory (можно убрать позже)
+_seed_heads_db()
