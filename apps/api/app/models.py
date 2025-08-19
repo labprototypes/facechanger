@@ -1,9 +1,17 @@
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import String, Integer, ForeignKey, DateTime, Enum, JSON, func, UniqueConstraint
 from datetime import datetime
 import enum
 
-class Base(DeclarativeBase): pass
+"""ORM models.
+
+Important: We reuse the global Base defined in database.py so that
+Base.metadata.create_all() actually sees these tables. Previously a second
+independent Base here meant create_all() created nothing (different registry),
+causing runtime errors like "relation 'head_profiles' does not exist" on fresh
+deploys before Alembic migrations ran.
+"""
+from .database import Base  # single shared DeclarativeBase instance
 
 class FrameStatus(str, enum.Enum):
     NEW = "NEW"

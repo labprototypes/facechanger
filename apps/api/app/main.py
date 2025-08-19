@@ -86,17 +86,24 @@ except Exception as e:
 
 def _seed_heads_db():
     from sqlalchemy import select
+    from sqlalchemy.exc import ProgrammingError, OperationalError
     sess = get_session()
     try:
-        existing = {h.trigger_token: h for h in sess.execute(select(models.HeadProfile)).scalars().all()}
+        try:
+            existing = {h.trigger_token: h for h in sess.execute(select(models.HeadProfile)).scalars().all()}
+        except (ProgrammingError, OperationalError) as e:
+            # Likely tables not created yet (e.g. before migrations applied). Avoid crashing startup.
+            print(f"[startup] skip DB head seeding (tables missing?): {e}")
+            sess.rollback()
+            return
         for h in PREDEFINED_HEADS:
             trig = h["trigger"]
             if trig in existing:
-                # update params if missing fields
+                # update params if missing fields / force num_inference_steps update
                 hp = existing[trig]
                 params = hp.params or {}
                 changed = False
-                for k,v in h["params"].items():
+                for k, v in h["params"].items():
                     if k not in params or (k == "num_inference_steps" and params.get(k) != v):
                         params[k] = v
                         changed = True
