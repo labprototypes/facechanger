@@ -9,6 +9,7 @@ from ..store import (
     register_frame, get_frame, list_frames_for_sku, FRAME_GENERATIONS, GENERATIONS_BY_ID,
     HEADS
 )
+from ..store import delete_frame, delete_sku
 from ..celery_client import queue_process_sku, queue_process_frame
 
 router = APIRouter(prefix="/skus", tags=["skus"])
@@ -129,6 +130,25 @@ def list_sku_frames(sku_code: str):
     sku_id = SKU_BY_CODE[sku_code]
     frames = list_frames_for_sku(sku_id)
     return {"items": frames}
+
+@router.delete("/{sku_code}")
+def delete_sku_public(sku_code: str):
+    if sku_code not in SKU_BY_CODE:
+        raise HTTPException(404, "sku not found")
+    delete_sku(sku_code)
+    return {"ok": True, "deleted": sku_code}
+
+@router.delete("/{sku_code}/frame/{frame_id}")
+def delete_frame_public(sku_code: str, frame_id: int):
+    if sku_code not in SKU_BY_CODE:
+        raise HTTPException(404, "sku not found")
+    fr = get_frame(int(frame_id))
+    if not fr:
+        raise HTTPException(404, "frame not found")
+    if fr.get("sku", {}).get("id") != SKU_BY_CODE[sku_code]:
+        raise HTTPException(400, "frame does not belong to sku")
+    delete_frame(int(frame_id))
+    return {"ok": True, "deleted_frame_id": int(frame_id)}
 
 
 @router.post("/{sku_code}/upload")

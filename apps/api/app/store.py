@@ -211,6 +211,59 @@ def get_frame_favorites(frame_id: int) -> List[str]:
         return []
     return list(fr.get("favorites") or [])
 
+# ---------------- Deletion helpers ----------------
+def delete_frame(frame_id: int) -> None:
+    """Удалить кадр и связанные генерации из памяти."""
+    fid = int(frame_id)
+    fr = FRAMES_BY_ID.pop(fid, None)
+    if not fr:
+        return
+    # удалить ссылку из SKU_FRAMES
+    sku = fr.get("sku") or {}
+    sid = sku.get("id")
+    if sid in SKU_FRAMES:
+        SKU_FRAMES[sid] = [x for x in SKU_FRAMES[sid] if x != fid]
+        if not SKU_FRAMES[sid]:
+            # пустой список остаётся — SKU удаляем только по явному вызову delete_sku
+            pass
+    # удалить связанные генерации
+    gen_ids = FRAME_GENERATIONS.pop(fid, [])
+    for gid in gen_ids:
+        GENERATIONS_BY_ID.pop(gid, None)
+
+def delete_sku(code_or_id) -> None:
+    """Удалить SKU по коду или числовому id (с кадрами и генерациями)."""
+    # нормализуем
+    sid = None
+    if isinstance(code_or_id, int):
+        sid = code_or_id
+    else:
+        # пытаемся как код
+        if code_or_id in SKU_BY_CODE:
+            sid = SKU_BY_CODE[code_or_id]
+        else:
+            # возможно строка id
+            try:
+                sid = int(str(code_or_id))
+            except ValueError:
+                return
+    if sid is None:
+        return
+    # найти код
+    code_to_del = None
+    for c, _sid in list(SKU_BY_CODE.items()):
+        if _sid == sid:
+            code_to_del = c
+            break
+    if code_to_del:
+        SKU_BY_CODE.pop(code_to_del, None)
+    # удалить кадры
+    frame_ids = SKU_FRAMES.pop(sid, [])
+    for fid in frame_ids:
+        delete_frame(fid)
+    # удалить сам SKU
+    SKUS_BY_ID.pop(sid, None)
+
 # backward name used earlier
 mark_frame_status = set_frame_status
 
@@ -300,5 +353,7 @@ __all__ = [
     "save_generation_prediction", "set_generation_outputs",
     "get_generation", "generations_for_frame",
         # Favorites
-        "set_frame_favorites", "get_frame_favorites",
+    "set_frame_favorites", "get_frame_favorites",
+    # Deletion
+    "delete_frame", "delete_sku",
 ]

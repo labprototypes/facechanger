@@ -125,6 +125,7 @@ export default function DashboardBatches() {
                     >
                       <Package size={16} /> {r.sku}
                     </button>
+                    <button onClick={() => { if(confirm(`Удалить SKU ${r.sku}?`)){ fetch(`${apiBase}/api/skus/${r.sku}`, { method: 'DELETE'}).then(()=> refetchSkus()); } }} className="mt-1 text-[10px] px-2 py-1 rounded border border-red-400 text-red-600">Удалить</button>
                   </div>
                   <div className="col-span-2 opacity-80">{r.headProfile || '—'}</div>
                   <div className="col-span-2 opacity-80">{r.done}/{r.frames} ({p}%)</div>

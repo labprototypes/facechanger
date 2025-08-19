@@ -115,16 +115,30 @@ export default function UploadBySkuPage() {
     [sku, files, stage]
   );
 
-  const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const list = e.target.files ? Array.from(e.target.files) : [];
-    if (list.length > 10) {
-      setFiles(list.slice(0,10));
-      setMsg('Выбрано больше 10 файлов, сохранены только первые 10');
+  const addFiles = (incoming: File[]) => {
+    if (!incoming.length) return;
+    const merged = [...files, ...incoming];
+    if (merged.length > 10) {
+      setFiles(merged.slice(0,10));
+      setMsg('Лимит 10 файлов, лишние отброшены');
       if (stage === 'idle') setStage('error');
     } else {
-      setFiles(list);
+      setFiles(merged);
     }
   };
+  const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const list = e.target.files ? Array.from(e.target.files) : [];
+    addFiles(list);
+    e.target.value = '';
+  };
+  const onDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const dtFiles = Array.from(e.dataTransfer.files || []);
+    addFiles(dtFiles);
+    setDrag(false);
+  };
+  const [drag, setDrag] = useState(false);
 
   const handleSend = async () => {
     try {
@@ -187,15 +201,31 @@ export default function UploadBySkuPage() {
 
           <div>
             <label className="text-sm opacity-80">Файлы</label>
-            <input
-              type="file"
-              multiple
-              onChange={onPick}
-              className="mt-1 w-full px-3 py-2 rounded-xl border border-black/10"
-              style={{ background: SURFACE, color: TEXT }}
-            />
+            <div
+              onDragOver={e=>{e.preventDefault(); setDrag(true);}}
+              onDragLeave={e=>{e.preventDefault(); setDrag(false);}}
+              onDrop={onDrop}
+              className={`mt-1 w-full rounded-2xl border border-dashed p-8 text-center text-sm transition ${drag? 'bg-lime-50 border-lime-400':'border-black/20'}`}
+              style={{ background: drag? '#f6ffe0' : SURFACE, color: TEXT }}
+            >
+              <p className="mb-2">Choose files or drop here</p>
+              <p className="text-[11px] opacity-60">До 10 изображений</p>
+              <div className="mt-4">
+                <label className="cursor-pointer px-3 py-1 rounded-lg border text-xs" style={{ background: SURFACE }}>
+                  Browse
+                  <input type="file" multiple className="hidden" onChange={onPick} />
+                </label>
+              </div>
+            </div>
             {files.length > 0 && (
-              <div className="mt-2 text-sm opacity-80">Выбрано: {files.length} (максимум 10)</div>
+              <div className="mt-4 grid grid-cols-5 gap-3">
+                {files.map((f, idx)=>(
+                  <div key={idx} className="relative group aspect-square rounded-lg overflow-hidden bg-black/10 flex items-center justify-center">
+                    <img src={URL.createObjectURL(f)} className="object-cover w-full h-full" />
+                    <button onClick={()=> setFiles(prev => prev.filter((_,i)=>i!==idx))} className="absolute top-1 right-1 w-6 h-6 rounded-full bg-white/80 text-xs border hover:bg-white shadow">✕</button>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
 

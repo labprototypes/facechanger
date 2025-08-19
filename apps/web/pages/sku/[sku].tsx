@@ -135,6 +135,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
         {mode !== 'tune' && (<button onClick={()=>setMode('tune')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Настроить</button>)}
         {mode === 'tune' && (<button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Просмотр</button>)}
         <button onClick={()=>onRedo(frame.id)} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Redo</button>
+        <button onClick={()=>window.dispatchEvent(new CustomEvent('delete-frame', { detail: { frameId: frame.id } }))} className="px-3 py-1 rounded-lg text-sm font-medium border border-red-400 text-red-600" style={{ background: SURFACE }}>Удалить</button>
       </div>
     </div>
   );
@@ -230,6 +231,29 @@ export default function SkuPage() {
     window.open(url, '_blank');
   };
 
+  const deleteFrameHandler = (e:any) => {
+    const { frameId } = e.detail || {};
+    if (!frameId || !sku) return;
+    if (!confirm(`Удалить кадр #${frameId}?`)) return;
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/skus/${sku}/frame/${frameId}`, { method: 'DELETE' })
+      .then(r=> { if(!r.ok) throw new Error('delete frame fail'); })
+      .then(()=> load())
+      .catch(err=> console.error(err));
+  };
+  useEffect(()=> {
+    window.addEventListener('delete-frame', deleteFrameHandler as any);
+    return ()=> window.removeEventListener('delete-frame', deleteFrameHandler as any);
+  }, [sku]);
+
+  const deleteSku = () => {
+    if (!sku) return;
+    if (!confirm(`Удалить весь SKU ${sku}?`)) return;
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/skus/${sku}`, { method: 'DELETE' })
+      .then(r=> { if(!r.ok) throw new Error('delete sku fail'); })
+      .then(()=> router.push('/dashboard'))
+      .catch(e=> console.error(e));
+  };
+
   return (
     <div className="min-h-screen" style={{ background: BG, color: TEXT }}>
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
@@ -245,6 +269,7 @@ export default function SkuPage() {
               <div className="h-full bg-lime-400 transition-all" style={{ width: `${progressPct}%` }} />
             </div>
             <span className="text-xs opacity-70 w-10 text-right">{progressPct}%</span>
+            <button onClick={deleteSku} className="px-3 py-1 rounded-lg border text-xs text-red-600 border-red-400" style={{ background: SURFACE }}>Удалить SKU</button>
             <button onClick={exportAll} className="px-3 py-1 rounded-lg border text-xs" style={{ background: SURFACE }}>{exporting? '...' : 'Экспорт URL'}</button>
             {exportUrls && <button onClick={copyAll} className="px-3 py-1 rounded-lg border text-xs" style={{ background: copied? ACCENT : SURFACE }}>{copied? 'Скопировано' : 'Копировать'}</button>}
             <button onClick={downloadFavoritesZip} className="px-3 py-1 rounded-lg border text-xs" style={{ background: SURFACE }}>Скачать избранные</button>

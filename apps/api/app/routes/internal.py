@@ -43,6 +43,7 @@ from ..store import (
     append_frame_outputs_version, # (frame_id: int, outputs: List[str]) -> None
     set_frame_favorites, get_frame_favorites,
     SKU_BY_CODE,
+    delete_frame, delete_sku,
 )
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -550,3 +551,22 @@ def debug_s3_public(key: str):
         return {"url": _s3_public_url(key)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Deletion endpoints
+# =============================================================================
+@router.delete("/frame/{frame_id}")
+def internal_delete_frame(frame_id: int):
+    fr = get_frame(int(frame_id))
+    if not fr:
+        raise HTTPException(404, "frame not found")
+    delete_frame(int(frame_id))
+    return {"ok": True, "deleted_frame_id": int(frame_id)}
+
+@router.delete("/sku/by-code/{code}")
+def internal_delete_sku(code: str):
+    if code not in SKU_BY_CODE:
+        raise HTTPException(404, "sku not found")
+    delete_sku(code)
+    return {"ok": True, "deleted": code}
