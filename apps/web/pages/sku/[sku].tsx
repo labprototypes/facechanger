@@ -33,7 +33,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
   const [numOutputs, setNumOutputs] = useState(frame.pending_params?.num_outputs ?? 3);
   const [format, setFormat] = useState(frame.pending_params?.output_format || 'png');
   const outs = frame.outputs || [];
-  const versions = frame.outputs_versions || [];
+  const versions: any[] = frame.outputs_versions || (outs.length ? [outs] : []);
   const favKeys = (frame.favorites || []).map((f:any)=> f.key || f); // normalized keys list
   const [maskUploading, setMaskUploading] = useState(false);
   const [maskError, setMaskError] = useState<string|null>(null);
@@ -86,65 +86,66 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
         </div>
       </div>
 
-      <div className="flex gap-2 mb-3">
-        <div className="w-20 h-20 rounded-lg overflow-hidden flex items-center justify-center bg-black/10">
-          {original ? <img src={original} alt="orig" className="object-cover w-full h-full"/> : <span className="text-[10px] opacity-50">Оригинал</span>}
+      <div className="mb-3">
+        <div className="grid grid-cols-5 gap-2">
+          {/* Original */}
+          <div className="relative aspect-square w-full rounded-lg overflow-hidden flex items-center justify-center bg-black/10">
+            {original ? <img src={original} alt="orig" className="object-cover w-full h-full"/> : <span className="text-[10px] opacity-50">Оригинал</span>}
+          </div>
+          {/* Mask */}
+          <div className="relative aspect-square w-full rounded-lg overflow-hidden flex items-center justify-center cursor-pointer" style={{ background: maskUrl? (showMask? ACCENT : "#0000000d") : "#0000000d" }} onClick={()=> maskUrl && setShowMask(v=>!v)}>
+            {maskUrl && showMask ? <img src={maskUrl} alt="mask" className="object-contain w-full h-full mix-blend-multiply"/> : <span className="text-[10px] opacity-60">Маска</span>}
+          </div>
+          {/* First version outputs (if any) */}
+          {(() => {
+            const first = versions[0] || [];
+            const offset = 0; // first version offset in flattened outputs
+            return Array.from({ length: 3 }).map((_, i) => {
+              const o = first[i];
+              if (!o) return <div key={i} className="aspect-square w-full rounded-lg bg-black/5 flex items-center justify-center text-[10px] opacity-30">–</div>;
+              const key = o.key || o;
+              const isFav = favKeys.includes(key);
+              const flatIndex = offset + i; // global index for preview
+              return (
+                <div key={i} className="relative aspect-square w-full rounded-lg overflow-hidden border flex items-center justify-center bg-black/5">
+                  <button onClick={()=>onPreview(flatIndex, frame)} className="absolute inset-0 hover:opacity-80">
+                    <img src={o.url || o} alt={`v1-${i+1}`} className="object-cover w-full h-full"/>
+                  </button>
+                  <button onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border ${isFav? 'bg-lime-300':'bg-white/80'} transition-none shadow`}>★</button>
+                </div>
+              );
+            });
+          })()}
         </div>
-        <div className="w-20 h-20 rounded-lg overflow-hidden flex items-center justify-center" style={{ background: maskUrl? (showMask? ACCENT : "#0000000d") : "#0000000d" }} onClick={()=> maskUrl && setShowMask(v=>!v)}>
-          {maskUrl && showMask ? <img src={maskUrl} alt="mask" className="object-contain w-full h-full mix-blend-multiply"/> : <span className="text-[10px] opacity-60">Маска</span>}
-        </div>
-        {([...(versions[0]||[]), ...outs].slice(0,3)).map((o:any, idx:number)=>{
-          const key = o.key || o;
-          const isFav = favKeys.includes(key);
+        {/* Additional versions (2,3,...) each on its own row, only outputs columns (align under last 3 cols) */}
+        {versions.slice(1).map((vers:any[], vi:number) => {
+          // compute offset (sum lengths of previous versions)
+          const offset = versions.slice(0, vi+1).reduce((acc,v)=>acc+v.length,0);
           return (
-            <div key={idx} className="relative w-20 h-20 rounded-lg overflow-hidden border flex items-center justify-center bg-black/5">
-              <button onClick={()=>onPreview(idx, frame)} className="absolute inset-0 hover:opacity-80">
-                <img src={o.url || o} alt={`g${idx}`} className="object-cover w-full h-full"/>
-              </button>
-              <button onClick={()=>toggleFavorite(key)} className={`absolute bottom-1 right-1 w-5 h-5 rounded-md text-[9px] flex items-center justify-center border ${isFav? 'bg-lime-300':'bg-white/80'} transition-none`}>★</button>
+            <div key={vi} className="grid grid-cols-5 gap-2 mt-2">
+              <div className="col-span-2" />
+              {Array.from({ length: 3 }).map((_, i) => {
+                const o = vers[i];
+                if (!o) return <div key={i} className="aspect-square w-full rounded-lg bg-black/5 flex items-center justify-center text-[10px] opacity-30">–</div>;
+                const key = o.key || o;
+                const isFav = favKeys.includes(key);
+                const flatIndex = offset + i;
+                return (
+                  <div key={i} className="relative aspect-square w-full rounded-lg overflow-hidden border flex items-center justify-center bg-black/5">
+                    <button onClick={()=>onPreview(flatIndex, frame)} className="absolute inset-0 hover:opacity-80">
+                      <img src={o.url || o} alt={`v${vi+2}-${i+1}`} className="object-cover w-full h-full"/>
+                    </button>
+                    <button onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border ${isFav? 'bg-lime-300':'bg-white/80'} transition-none shadow`}>★</button>
+                  </div>
+                );
+              })}
             </div>
           );
         })}
       </div>
 
-      {mode === "view" && (
-        <div className="mb-3 flex flex-col gap-3">
-          {versions.length > 0 ? versions.map((vers: any[], vi: number) => (
-            <div key={vi}>
-              <div className="text-[11px] opacity-60 mb-1">Версия V{vi+1}</div>
-              <div className="grid grid-cols-3 gap-2">
-                {vers.map((o: any, idx: number) => {
-                  const key = o.key || o;
-                  const isFav = favKeys.includes(key);
-                  return (
-                    <div key={idx} className="relative group">
-                      <button onClick={() => onPreview(idx, frame)} className="aspect-square w-full bg-black/5 rounded overflow-hidden flex items-center justify-center hover:opacity-80 border">
-                        <img src={o.url || o} alt={`v${vi+1}-${idx+1}`} className="object-cover w-full h-full" />
-                      </button>
-                      <button title={isFav? 'Убрать из избранного':'В избранное'} onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border ${isFav? 'bg-lime-300':'bg-white/80'} transition-none shadow`}>★</button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )) : (
-            <div className="grid grid-cols-3 gap-2">
-              {outs.length === 0 && <div className="col-span-3 text-xs opacity-60 italic">Ждём результаты…</div>}
-              {outs.map((o: any, idx: number) => {
-                const key = o.key || o;
-                const isFav = favKeys.includes(key);
-                return (
-                  <div key={idx} className="relative group">
-                    <button onClick={() => onPreview(idx, frame)} className="aspect-square w-full bg-black/5 rounded overflow-hidden flex items-center justify-center hover:opacity-80 border">
-                      <img src={o.url || o} alt={`v${idx+1}`} className="object-cover w-full h-full" />
-                    </button>
-                    <button title={isFav? 'Убрать из избранного':'В избранное'} onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border ${isFav? 'bg-lime-300':'bg-white/80'} transition-none shadow`}>★</button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+      {mode === "view" && versions.length === 0 && (
+        <div className="mb-3 text-xs opacity-60 italic">Ждём результаты…</div>
       )}
 
       {mode !== "view" && (
@@ -177,7 +178,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2">
+  <div className="flex flex-wrap gap-2 mt-1">
         <button onClick={() => setAccepted(true)} className="px-3 py-1 rounded-lg text-sm font-medium" style={{ background: ACCENT }}>Принять</button>
   {mode !== 'tune' && (<button onClick={()=>{ setPrompt(initialPrompt); setMode('tune'); }} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Настроить</button>)}
         {mode === 'tune' && (<button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Просмотр</button>)}
