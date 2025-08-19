@@ -406,7 +406,7 @@ def internal_list_generations(frame_id: int):
 
 
 @router.post("/frame/{frame_id}/redo")
-def internal_redo_frame(frame_id: int, body: _RedoBody):
+def internal_redo_frame(frame_id: int, body: _RedoBody | None = None):
     """Пере-запустить генерацию по кадру.
     НЕ удаляем прошлые outputs (они уже в outputs_versions), просто ставим статус queued.
     Параметры из body сохраняем как pending_params чтобы воркер использовал их при следующем запуске."""
@@ -417,7 +417,9 @@ def internal_redo_frame(frame_id: int, body: _RedoBody):
     set_frame_status(int(frame_id), "queued")
     # сохраним параметры для воркера
     from ..store import set_frame_pending_params
-    params = {k: v for k, v in body.dict().items() if v is not None}
+    params = {}
+    if body is not None:
+        params = {k: v for k, v in body.dict().items() if v is not None}
     if params:
         set_frame_pending_params(int(frame_id), params)
     # enqueue
