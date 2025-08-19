@@ -14,6 +14,9 @@ except Exception:
 MARGIN = float(os.environ.get("HEAD_MASK_MARGIN", "0.30"))
 MIN_SIZE = int(os.environ.get("HEAD_MASK_MIN_SIZE", "0"))
 HEAD_RATIO = float(os.environ.get("HEAD_FROM_BODY_RATIO", "0.20"))
+PERSON_WIDTH_SCALE = float(os.environ.get("HEAD_PERSON_WIDTH_SCALE", "0.55"))  # how much of person width to use for head square side baseline
+PERSON_HEAD_TOP_FRAC = float(os.environ.get("HEAD_PERSON_HEAD_TOP_FRAC", "0.23"))  # fraction of person height where bottom of head square roughly ends (shoulder line)
+PERSON_EXTRA_UP_FRAC = float(os.environ.get("HEAD_PERSON_EXTRA_UP_FRAC", "0.15"))  # extend upward above computed head square
 
 # Optional mediapipe pose (graceful fallback)
 try:
@@ -178,12 +181,28 @@ def generate_head_mask_auto(image_path: str, out_mask_path: str):
     person = _detect_person_box(img)
     if person:
         x1,y1,x2,y2 = person
-        body_h = y2-y1
-        head_h = max(int(body_h*HEAD_RATIO), 32)
-        head_box = (x1, y1, x2, min(y1+head_h, y2))
+        pw = max(1, x2 - x1)
+        ph = max(1, y2 - y1)
+        # Heuristic shoulders/back: define a square whose bottom lies near PERSON_HEAD_TOP_FRAC of person height
+        head_bottom = y1 + int(ph * PERSON_HEAD_TOP_FRAC)
+        side_from_width = int(pw * PERSON_WIDTH_SCALE)
+        side_from_height = int(ph * HEAD_RATIO)
+        side = max(32, side_from_width, side_from_height)
+        # center horizontally within person box
+        cx = x1 + pw // 2
+        y2h = head_bottom
+        y1h = y2h - side
+        # add extra upward extension (back hair) if space
+        extra_up = int(side * PERSON_EXTRA_UP_FRAC)
+        y1h = max(0, y1h - extra_up)
+        # clamp
+        if y1h < 0:
+            y1h = 0
+            y2h = y1h + side
+        head_box = (cx - side//2, y1h, cx - side//2 + side, y2h)
         sq = _square_with_margin(head_box, img.shape)
         mask = _build_mask(img.shape, sq); cv2.imwrite(out_mask_path, mask)
-        return {"strategy":"person","box":sq}, out_mask_path
+        return {"strategy":"person-shoulders","box":sq}, out_mask_path
     h,w = img.shape[:2]
     side = int(min(h,w)*0.5)
     cx, cy = w//2, int(h*0.35)
