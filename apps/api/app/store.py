@@ -207,7 +207,10 @@ def list_frames_for_sku(sku_id: int) -> List[Dict[str, Any]]:
         from sqlalchemy import select
         sess = get_session()
         try:
-            rows = sess.execute(select(models.Frame).where(models.Frame.sku_id == int(sku_id))).scalars().all()
+            # Order frames deterministically by id for stable per-SKU sequencing in UI
+            rows = sess.execute(
+                select(models.Frame).where(models.Frame.sku_id == int(sku_id)).order_by(models.Frame.id.asc())
+            ).scalars().all()
             out = []
             for fr in rows:
                 obj = get_frame(fr.id)
@@ -410,7 +413,10 @@ def delete_sku(code_or_id) -> None:
                         return
             if sid is None:
                 return
-            frame_ids = [r.id for r in sess.execute(select(models.Frame.id).where(models.Frame.sku_id == sid)).scalars().all()]
+            # select(...Frame.id).scalars().all() already returns list[int]
+            frame_ids = sess.execute(
+                select(models.Frame.id).where(models.Frame.sku_id == sid)
+            ).scalars().all()
             for fid in frame_ids:
                 sess.execute(sqldelete(models.FrameFavorite).where(models.FrameFavorite.frame_id == fid))
                 sess.execute(sqldelete(models.FrameOutputVersion).where(models.FrameOutputVersion.frame_id == fid))

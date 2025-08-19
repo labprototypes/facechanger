@@ -46,7 +46,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
   return (
     <div className="rounded-2xl p-3 shadow-sm border flex flex-col" style={{ background: SURFACE, borderColor: "#0000001a" }}>
       <div className="flex items-center justify-between mb-3">
-        <div className="text-sm opacity-70">Кадр #{frame.id}</div>
+  <div className="text-sm opacity-70">Кадр #{frame.seq || frame.id}</div>
         <div className="flex items-center gap-2">
           {maskUrl && (
             <button onClick={() => setShowMask(v=>!v)} className="px-2 py-1 rounded-lg text-xs border" style={{ background: SURFACE }}>{showMask?"Скрыть маску":"Маска"}</button>
@@ -299,7 +299,7 @@ export default function SkuPage() {
               </div>
             </div>
             <div>
-              <div className="mb-2 font-medium">Результат V{previewCtx.variant + 1} (Кадр #{previewCtx.frame.id})</div>
+              <div className="mb-2 font-medium">Результат V{previewCtx.variant + 1} (Кадр #{previewCtx.frame.seq || previewCtx.frame.id})</div>
               <div className="w-full aspect-square bg-black/5 rounded-xl overflow-hidden border flex items-center justify-center" style={{ borderColor: "#0000001a" }}>
                 {previewCtx.frame.outputs?.[previewCtx.variant] ? (
                   <img src={previewCtx.frame.outputs[previewCtx.variant].url || previewCtx.frame.outputs[previewCtx.variant]} className="object-contain w-full h-full" />

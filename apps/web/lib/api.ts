@@ -45,9 +45,10 @@ export async function startProcess(sku: string) {
 }
 
 export async function fetchSkuView(code: string) {
+  // Use richer internal view that includes outputs, versions, favorites
   const base = API_BASE || "";
-  const r = await fetch(`${base}/api/skus/${code}`);
-  if (!r.ok) throw new Error("Failed to fetch sku");
+  const r = await fetch(`${base}/internal/sku/by-code/${code}/view`, { cache: "no-store" });
+  if (!r.ok) throw new Error("Failed to fetch sku view");
   return r.json();
 }
 

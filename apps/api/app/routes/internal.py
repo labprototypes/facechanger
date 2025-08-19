@@ -208,8 +208,9 @@ def internal_sku_view_by_code(code: str):
         sid = SKU_BY_CODE[code]
     frames = list_frames_for_sku(sid) or []
     items = []
-    for fr in frames:
+    for idx, fr in enumerate(frames, start=1):
         obj = _frame_to_public_json(fr)
+        obj["seq"] = idx  # local sequential number per SKU starting at 1
         # добавим версионность если есть
         if fr.get("outputs_versions"):
             obj["outputs_versions"] = []
