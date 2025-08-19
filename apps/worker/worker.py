@@ -575,18 +575,18 @@ def process_frame(frame_id: int):
         mask_key = f"masks/{sku_code}/{frame_id}.png"
         with open(mask_path, "rb") as f:
             put_mask_to_s3(mask_key, f.read())
-        # регистрация mask_key в API
+        # регистрация mask_key + meta в API (без вызова /redo чтобы не запускать лишнюю генерацию)
         try:
+            payload = {"key": mask_key}
+            if isinstance(meta, dict):
+                if meta.get("strategy"):
+                    payload["strategy"] = meta.get("strategy")
+                if meta.get("box"):
+                    payload["box"] = list(meta.get("box")) if not isinstance(meta.get("box"), list) else meta.get("box")
             with httpx.Client(timeout=30) as c:
-                c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/mask", json={"key": mask_key})
+                c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/mask", json=payload)
         except Exception as e:
             print(f"[worker] failed to register mask key frame={frame_id}: {e}")
-        # сохраним meta как pending_params чтобы UI мог отобразить стратегию
-        try:
-            with httpx.Client(timeout=30) as c:
-                c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/redo", json={})  # no-op to ensure frame exists
-        except Exception:
-            pass
         print(f"[worker] frame {frame_id}: auto mask strategy={meta.get('strategy')} box={meta.get('box')}")
         # безопасный URL для Replicate (presign)
         mask_url = s3_client().generate_presigned_url(

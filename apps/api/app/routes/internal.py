@@ -34,7 +34,7 @@ from ..store import (
     register_generation, save_generation_prediction, generations_for_frame,
     set_generation_outputs, set_frame_outputs, append_frame_outputs_version,
     set_frame_favorites, get_frame_favorites, get_sku_by_code, set_frame_mask,
-    get_all_sku_codes, list_sku_codes_by_date,
+    get_all_sku_codes, list_sku_codes_by_date, set_frame_pending_params,
     SKU_BY_CODE, delete_frame, delete_sku
 )
 USE_DB = bool(os.environ.get("DATABASE_URL"))
@@ -315,6 +315,8 @@ class _RedoBody(BaseModel):
 
 class _MaskBody(BaseModel):
     key: str
+    strategy: str | None = None
+    box: list[int] | None = None
 
 
 @router.post("/generation/{generation_id}/prediction")
@@ -433,7 +435,8 @@ def internal_redo_frame(frame_id: int, body: _RedoBody | None = None):
 @router.post("/frame/{frame_id}/mask")
 def internal_set_mask(frame_id: int, body: _MaskBody):
     """Привязать/обновить mask_key для кадра.
-    После этого /internal/.../view начнет возвращать mask_url.
+    Дополнительно можно передать strategy и box (список из 4 чисел), которые будут сохранены
+    в pending_params как mask_strategy / mask_box для отображения в UI без автоперезапуска.
     """
     fr = get_frame(int(frame_id))
     if not fr:
@@ -443,9 +446,15 @@ def internal_set_mask(frame_id: int, body: _MaskBody):
         raise HTTPException(status_code=422, detail="key required")
     try:
         set_frame_mask(int(frame_id), key)
+        meta_updates = {}
+        if body.strategy:
+            meta_updates["mask_strategy"] = body.strategy
+        if body.box and isinstance(body.box, list):
+            meta_updates["mask_box"] = body.box
+        if meta_updates:
+            set_frame_pending_params(int(frame_id), meta_updates)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed to set mask: {e}")
-    # Вернём обновлённый публичный/подписанный URL
     return {"ok": True, "frame_id": int(frame_id), "mask_key": key, "mask_url": _best_url_for_key(key)}
 
 
