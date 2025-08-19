@@ -548,26 +548,40 @@ def process_frame(frame_id: int):
         raise RuntimeError("Frame has no original_url or original_key")
 
     # 2) маска -> в S3 (с фолбэком presigned при необходимости)
-    mask_key = f"masks/{sku_code}/{frame_id}.png"
-    img, source_image_url = fetch_source_image_bgr(original_url, original_key)
-    H, W = img.shape[:2]
-    # Попытка сегментации головы через Replicate (если настроено)
-    seg_mask = replicate_segment_head(ensure_presigned_download(original_url, original_key), W, H)
-    if seg_mask is not None:
-        mask = seg_mask
-        print(f"[worker] frame {frame_id}: using head segmentation mask")
+    # Если пользователь уже загрузил свою маску (mask_key присутствует), используем её.
+    existing_mask_key = info.get("mask_key")
+    mask_key = existing_mask_key or f"masks/{sku_code}/{frame_id}.png"
+    if existing_mask_key:
+        print(f"[worker] frame {frame_id}: reuse existing mask {existing_mask_key}")
+        mask_url = s3_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": mask_key},
+            ExpiresIn=3600,
+        )
     else:
-        mask = make_face_mask(img, expand_ratio=MASK_EXPAND_RATIO)
-        print(f"[worker] frame {frame_id}: fallback local mask (YOLO/Haar)")
-    mask_png = _to_png_bytes(mask)
-    put_mask_to_s3(mask_key, mask_png)
-    
-    # безопасно для приватного бакета:
-    mask_url = s3_client().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": S3_BUCKET, "Key": mask_key},
-        ExpiresIn=3600,
-    )
+        img, source_image_url = fetch_source_image_bgr(original_url, original_key)
+        H, W = img.shape[:2]
+        seg_mask = replicate_segment_head(ensure_presigned_download(original_url, original_key), W, H)
+        if seg_mask is not None:
+            mask = seg_mask
+            print(f"[worker] frame {frame_id}: using head segmentation mask")
+        else:
+            mask = make_face_mask(img, expand_ratio=MASK_EXPAND_RATIO)
+            print(f"[worker] frame {frame_id}: fallback local mask (YOLO/Haar)")
+        mask_png = _to_png_bytes(mask)
+        put_mask_to_s3(mask_key, mask_png)
+        # безопасно для приватного бакета:
+        mask_url = s3_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": mask_key},
+            ExpiresIn=3600,
+        )
+        # Зарегистрируем mask_key на бэке, чтобы фронт увидел.
+        try:
+            with httpx.Client(timeout=30) as c:
+                c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/mask", json={"key": mask_key})
+        except Exception as e:
+            print(f"[worker] failed to register mask key frame={frame_id}: {e}")
 
     image_url_for_model = ensure_presigned_download(original_url, original_key)
     mask_url_for_model  = ensure_presigned_download(None, mask_key)

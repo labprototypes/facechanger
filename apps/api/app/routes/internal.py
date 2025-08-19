@@ -33,7 +33,7 @@ from ..store import (
     list_frames_for_sku, get_frame, set_frame_status,
     register_generation, save_generation_prediction, generations_for_frame,
     set_generation_outputs, set_frame_outputs, append_frame_outputs_version,
-    set_frame_favorites, get_frame_favorites, get_sku_by_code,
+    set_frame_favorites, get_frame_favorites, get_sku_by_code, set_frame_mask,
     get_all_sku_codes, list_sku_codes_by_date,
     SKU_BY_CODE, delete_frame, delete_sku
 )
@@ -313,6 +313,9 @@ class _RedoBody(BaseModel):
     output_format: str | None = None
     num_outputs: int | None = None
 
+class _MaskBody(BaseModel):
+    key: str
+
 
 @router.post("/generation/{generation_id}/prediction")
 def internal_set_prediction(generation_id: int, body: _PredictionBody):
@@ -424,6 +427,24 @@ def internal_redo_frame(frame_id: int, body: _RedoBody):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"enqueue failed: {e}")
     return {"ok": True, "frame_id": int(frame_id), "params": params}
+
+@router.post("/frame/{frame_id}/mask")
+def internal_set_mask(frame_id: int, body: _MaskBody):
+    """Привязать/обновить mask_key для кадра.
+    После этого /internal/.../view начнет возвращать mask_url.
+    """
+    fr = get_frame(int(frame_id))
+    if not fr:
+        raise HTTPException(status_code=404, detail="frame not found")
+    key = body.key.strip()
+    if not key:
+        raise HTTPException(status_code=422, detail="key required")
+    try:
+        set_frame_mask(int(frame_id), key)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"failed to set mask: {e}")
+    # Вернём обновлённый публичный/подписанный URL
+    return {"ok": True, "frame_id": int(frame_id), "mask_key": key, "mask_url": _best_url_for_key(key)}
 
 
 @router.get("/sku/by-code/{code}/export-urls")

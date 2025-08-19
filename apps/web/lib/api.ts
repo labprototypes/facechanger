@@ -54,12 +54,12 @@ export async function fetchSkuView(code: string) {
 
 export async function redoFrame(frameId: number, params: any = {}) {
   const base = API_BASE || "";
-  const r = await fetch(`${base}/internal/frame/${frameId}/generation`, {
+  const r = await fetch(`${base}/internal/frame/${frameId}/redo`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ params }),
+    body: JSON.stringify(params || {}),
   });
-  if (!r.ok) throw new Error("Failed to enqueue");
+  if (!r.ok) throw new Error("Failed to redo");
   return r.json();
 }
 
@@ -67,5 +67,18 @@ export async function fetchSkuViewByCode(code: string) {
   const base = API_BASE || "";
   const r = await fetch(`${base}/internal/sku/by-code/${code}/view`, { cache: "no-store" });
   if (!r.ok) throw new Error(`Failed to load SKU view: ${r.status}`);
+  return r.json();
+}
+
+export async function requestMaskUploadUrl(frameId: number, filename: string, size?: number, type?: string) {
+  // reuse generic /skus upload since masks stored like uploads then assigned
+  // Simpler: we generate a presigned PUT directly under masks/ path via a small helper endpoint (not yet implemented) -> fallback: use direct upload via generic S3 client absent.
+  throw new Error("mask upload URL helper not implemented on server");
+}
+
+export async function setFrameMask(frameId: number, key: string) {
+  const base = API_BASE || "";
+  const r = await fetch(`${base}/internal/frame/${frameId}/mask`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
+  if(!r.ok) throw new Error('Failed to set mask');
   return r.json();
 }

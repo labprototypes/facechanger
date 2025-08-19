@@ -2,7 +2,7 @@
 // @ts-nocheck
 import React, { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/router";
-import { fetchSkuViewByCode as fetchSkuView } from "../../lib/api";
+import { fetchSkuViewByCode as fetchSkuView, setFrameMask } from "../../lib/api";
 
 const BG = "#f2f2f2"; const TEXT = "#000000"; const SURFACE = "#ffffff"; const ACCENT = "#B8FF01";
 
@@ -34,6 +34,36 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
   const outs = frame.outputs || [];
   const versions = frame.outputs_versions || [];
   const favKeys = (frame.favorites || []).map((f:any)=> f.key || f); // normalized keys list
+  const [maskUploading, setMaskUploading] = useState(false);
+  const [maskError, setMaskError] = useState<string|null>(null);
+
+  const uploadMask = async (file: File) => {
+    setMaskError(null); setMaskUploading(true);
+    try {
+      // Reuse generic uploads endpoint: POST /skus/{code}/upload-urls with single file, then PUT, then associate.
+      const skuCode = frame.sku?.code;
+      if(!skuCode) throw new Error('missing sku code');
+      const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/skus/${encodeURIComponent(skuCode)}/upload-urls`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: [{ name: file.name, size: file.size, type: file.type }] }) });
+      if(!r.ok) throw new Error('upload-urls failed');
+      const j = await r.json();
+      const item = j.items?.[0];
+      if(!item) throw new Error('no upload url');
+      const putUrl = item.put_url;
+      // PUT file
+      const putRes = await fetch(putUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'image/png' }, body: file });
+      if(!putRes.ok) throw new Error('PUT failed');
+      const key = item.key;
+      // Associate mask with frame
+      await setFrameMask(frame.id, key);
+      // locally reflect
+      frame.mask_key = key;
+      frame.mask_url = putUrl.split('?')[0].replace(/https:\/\/[^/]+\//, (m)=> m) // crude: backend will supply correct on reload
+    } catch(e:any) {
+      console.error(e); setMaskError(String(e));
+    } finally {
+      setMaskUploading(false);
+    }
+  };
 
   const toggleFavorite = (key:string) => {
     let next: string[];
@@ -114,6 +144,14 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
             <div>
               <label className="text-xs font-medium">Prompt</label>
               <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={2} className="mt-1 w-full text-xs p-2 rounded border" style={{ background: SURFACE }} />
+            </div>
+            <div>
+              <label className="text-xs font-medium flex items-center gap-2">Маска {maskUploading && <span className="text-[10px] opacity-60">загрузка…</span>}</label>
+              <div className="mt-1 flex items-center gap-2">
+                <input type="file" accept="image/png,image/webp,image/jpeg" disabled={maskUploading} onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
+                {maskError && <span className="text-[10px] text-red-600">{maskError}</span>}
+              </div>
+              <p className="mt-1 text-[10px] opacity-60">Можно загрузить свою кастомную маску (применяется для следующей генерации).</p>
             </div>
             <div className="grid grid-cols-5 gap-2 text-xs">
               <div><label className="block">Strength</label><input type="number" step="0.01" min={0.1} max={1} value={promptStrength} onChange={e=>setPromptStrength(parseFloat(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
