@@ -90,15 +90,40 @@ def submit_sku(sku_code: str, body: SubmitReq):
 
     sku_id = _ensure_sku(sku_code, brand=body.brand)
 
-    frame_ids: List[int] = []
+    # Resolve / persist head_profile for DB mode
+    if USE_DB and body.head_id:
+        head_obj = HEADS.get(body.head_id)
+        if head_obj:
+            from ..database import get_session
+            from sqlalchemy import select
+            from .. import models
+            sess = get_session()
+            try:
+                trig = head_obj.get("trigger")
+                hp = None
+                if trig:
+                    hp = sess.execute(select(models.HeadProfile).where(models.HeadProfile.trigger_token == trig)).scalar_one_or_none()
+                if not hp and head_obj.get("name"):
+                    hp = sess.execute(select(models.HeadProfile).where(models.HeadProfile.name == head_obj.get("name"))).scalar_one_or_none()
+                if hp:
+                    sku_row = sess.get(models.SKU, int(sku_id))
+                    if sku_row and sku_row.head_profile_id != hp.id:
+                        sku_row.head_profile_id = hp.id
+                        sess.add(sku_row); sess.commit()
+            finally:
+                sess.close()
+
     head_obj = HEADS.get(body.head_id) if body.head_id else None
     head_payload = None
-    if head_obj:
+    if head_obj and not USE_DB:
         head_payload = {
             "trigger_token": head_obj.get("trigger"),
             "prompt_template": head_obj.get("params", {}).get("prompt_template", "a photo of {token} female model"),
             "model_version": head_obj.get("model_version"),
+            "params": head_obj.get("params") or {},
         }
+
+    frame_ids: List[int] = []
     for it in body.items:
         fid = register_frame(sku_id, original_key=it.key, head=head_payload)
         frame_ids.append(fid)
