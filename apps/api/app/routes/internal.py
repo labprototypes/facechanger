@@ -232,12 +232,6 @@ def presign_get_url(key: str):
     """
     return {"url": _s3_signed_get(key)}
 
-@router.post("/sku/by-code/{code}/done")
-def internal_mark_sku_done(code: str, body: _SkuDoneBody):
-    if code not in SKU_BY_CODE and not get_sku_by_code(code):
-        raise HTTPException(status_code=404, detail="sku not found")
-    set_sku_done(code, body.done)
-    return {"ok": True, "code": code, "done": body.done}
 
 @router.get("/sku/{sku_id}/frames")
 def internal_sku_frames(sku_id: str):
@@ -330,6 +324,13 @@ class _MaskBody(BaseModel):
 
 class _SkuDoneBody(BaseModel):
     done: bool = True
+
+@router.post("/sku/by-code/{code}/done")
+def internal_mark_sku_done(code: str, body: _SkuDoneBody):
+    if code not in SKU_BY_CODE and not get_sku_by_code(code):
+        raise HTTPException(status_code=404, detail="sku not found")
+    set_sku_done(code, body.done)
+    return {"ok": True, "code": code, "done": body.done}
 
 
 @router.post("/generation/{generation_id}/prediction")
