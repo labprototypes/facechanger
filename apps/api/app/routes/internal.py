@@ -351,17 +351,29 @@ def internal_generation_complete(generation_id: int, body: _GenerationCompleteBo
         norm.append(o)
     try:
         set_generation_outputs(int(generation_id), norm)
-        # Продублируем на сам frame (удобно для простого UI /internal/sku/.../view)
-        # Находим frame_id через GENERATIONS_BY_ID, но чтобы не тянуть его тут напрямую
-        # воспользуемся generations_for_frame обходом: найдём generation и возьмём frame_id
-        from ..store import GENERATIONS_BY_ID  # локальный импорт чтобы избежать циклов
-        gen_rec = GENERATIONS_BY_ID.get(int(generation_id)) or {}
-        frame_id = gen_rec.get("frame_id")
+        # Определяем frame_id корректно для обеих реализаций store.
+        frame_id = None
+        if USE_DB:
+            # В режиме БД in-memory GENERATIONS_BY_ID пустой — достанем напрямую.
+            try:
+                from ..store import get_generation  # lazy import чтобы избежать циклов
+                gen_rec = get_generation(int(generation_id)) or {}
+                frame_id = gen_rec.get("frame_id")
+            except Exception:
+                frame_id = None
+        else:
+            # Старый путь через in-memory словарь
+            from ..store import GENERATIONS_BY_ID  # type: ignore
+            gen_rec = GENERATIONS_BY_ID.get(int(generation_id)) or {}
+            frame_id = gen_rec.get("frame_id")
+
         if frame_id is not None:
             try:
-                # добавляем новой версией
                 append_frame_outputs_version(int(frame_id), norm)
-                # статус кадра -> done
+            except Exception:
+                # Логически не критично если версия не добавилась — продолжаем.
+                pass
+            try:
                 set_frame_status(int(frame_id), "done")
             except Exception:
                 pass
