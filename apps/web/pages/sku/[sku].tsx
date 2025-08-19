@@ -331,7 +331,7 @@ export default function SkuPage() {
         {error && <p className="mb-4 text-red-600">Ошибка: {error}</p>}
 
         {data && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="flex flex-col gap-10">
             {data.frames.map((fr:any) => (
               <FrameCard key={fr.id} frame={fr} onPreview={(v,frame)=>openPreview(v,frame)} onRedo={redoFrame} onRegenerate={(id, params)=>redoFrameWithParams(id, params)} onSetFavorites={setFavorites} />
             ))}
