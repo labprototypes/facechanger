@@ -16,6 +16,7 @@ except Exception as e:  # ultralytics may not be installed yet
     _YOLO_MODEL_LOAD_ERROR = str(e)
 import boto3
 import re
+from .head_mask import generate_head_mask_auto
 
 # ======== ENV ========
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -547,41 +548,49 @@ def process_frame(frame_id: int):
     if not original_url:
         raise RuntimeError("Frame has no original_url or original_key")
 
-    # 2) маска -> в S3 (с фолбэком presigned при необходимости)
-    # Если пользователь уже загрузил свою маску (mask_key присутствует), используем её.
+    # 2) Маска: новая стратегия — квадратная auto mask (face -> pose -> person -> center)
     existing_mask_key = info.get("mask_key")
-    mask_key = existing_mask_key or f"masks/{sku_code}/{frame_id}.png"
-    if existing_mask_key:
-        print(f"[worker] frame {frame_id}: reuse existing mask {existing_mask_key}")
+    overwrite = os.environ.get("HEAD_MASK_OVERWRITE", "0") == "1"
+    if existing_mask_key and not overwrite:
+        mask_key = existing_mask_key
+        print(f"[worker] frame {frame_id}: reuse existing mask {mask_key}")
         mask_url = s3_client().generate_presigned_url(
             "get_object",
             Params={"Bucket": S3_BUCKET, "Key": mask_key},
             ExpiresIn=3600,
         )
     else:
-        img, source_image_url = fetch_source_image_bgr(original_url, original_key)
-        H, W = img.shape[:2]
-        seg_mask = replicate_segment_head(ensure_presigned_download(original_url, original_key), W, H)
-        if seg_mask is not None:
-            mask = seg_mask
-            print(f"[worker] frame {frame_id}: using head segmentation mask")
-        else:
-            mask = make_face_mask(img, expand_ratio=MASK_EXPAND_RATIO)
-            print(f"[worker] frame {frame_id}: fallback local mask (YOLO/Haar)")
-        mask_png = _to_png_bytes(mask)
-        put_mask_to_s3(mask_key, mask_png)
-        # безопасно для приватного бакета:
-        mask_url = s3_client().generate_presigned_url(
-            "get_object",
-            Params={"Bucket": S3_BUCKET, "Key": mask_key},
-            ExpiresIn=3600,
-        )
-        # Зарегистрируем mask_key на бэке, чтобы фронт увидел.
+        # скачиваем оригинал локально для head mask (используем presigned для приватного)
+        presigned_original = ensure_presigned_download(original_url, original_key)
+        img_bytes = http_get_bytes(presigned_original, timeout=120)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_in:
+            tmp_in.write(img_bytes)
+            tmp_in_path = tmp_in.name
+        meta, mask_path = generate_head_mask_auto(tmp_in_path, "/tmp/head_mask.png")
+        # загрузка маски в S3 (унифицированный ключ)
+        mask_key = f"masks/{sku_code}/{frame_id}.png"
+        with open(mask_path, "rb") as f:
+            put_mask_to_s3(mask_key, f.read())
+        # регистрация mask_key в API
         try:
             with httpx.Client(timeout=30) as c:
                 c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/mask", json={"key": mask_key})
         except Exception as e:
             print(f"[worker] failed to register mask key frame={frame_id}: {e}")
+        # сохраним meta как pending_params чтобы UI мог отобразить стратегию
+        try:
+            with httpx.Client(timeout=30) as c:
+                c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/redo", json={})  # no-op to ensure frame exists
+        except Exception:
+            pass
+        print(f"[worker] frame {frame_id}: auto mask strategy={meta.get('strategy')} box={meta.get('box')}")
+        # безопасный URL для Replicate (presign)
+        mask_url = s3_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": mask_key},
+            ExpiresIn=3600,
+        )
 
     image_url_for_model = ensure_presigned_download(original_url, original_key)
     mask_url_for_model  = ensure_presigned_download(None, mask_key)
