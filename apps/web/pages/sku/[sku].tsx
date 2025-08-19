@@ -21,7 +21,7 @@ function Modal({ open, onClose, children }: { open: boolean; onClose: () => void
   );
 }
 
-function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: { frame: any; onPreview: (variantIndex: number, frame: any) => void; onRedo: (frameId:number)=>void; onRegenerate: (frameId:number, params:any)=>void; onSetFavorites: (frameId:number, favKeys:string[])=>void }) {
+function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: { frame: any; onPreview: (variantIndex: number, frame: any) => void; onRedo: (frameId:number, params?:any)=>void; onRegenerate: (frameId:number, params:any)=>void; onSetFavorites: (frameId:number, favKeys:string[])=>void }) {
   const [mode, setMode] = useState<"view"|"tune"|"rerun">("view");
   const [accepted, setAccepted] = useState(false);
   const [showMask, setShowMask] = useState(false);
@@ -172,7 +172,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
         <button onClick={() => setAccepted(true)} className="px-3 py-1 rounded-lg text-sm font-medium" style={{ background: ACCENT }}>Принять</button>
         {mode !== 'tune' && (<button onClick={()=>setMode('tune')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Настроить</button>)}
         {mode === 'tune' && (<button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Просмотр</button>)}
-        <button onClick={()=>onRedo(frame.id)} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Redo</button>
+  <button onClick={()=>onRedo(frame.id, { force_segmentation_mask: true })} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Голова</button>
         <button onClick={()=>window.dispatchEvent(new CustomEvent('delete-frame', { detail: { frameId: frame.id } }))} className="px-3 py-1 rounded-lg text-sm font-medium border border-red-400 text-red-600" style={{ background: SURFACE }}>Удалить</button>
       </div>
     </div>
@@ -221,9 +221,11 @@ export default function SkuPage() {
     setPreviewOpen(true);
   };
 
-  const redoFrame = async (frameId: number) => {
+  const redoFrame = async (frameId: number, params?: any) => {
     try {
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frameId}/redo`, { method: 'POST' });
+      const opts: any = { method: 'POST' };
+      if (params) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(params); }
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frameId}/redo`, opts);
       load();
     } catch(e) { console.error(e); }
   };

@@ -551,7 +551,7 @@ def process_frame(frame_id: int):
     if not original_url:
         raise RuntimeError("Frame has no original_url or original_key")
 
-    # 2) Маска: новая стратегия — квадратная auto mask (face -> pose -> person -> center)
+    # 2) Маска: стратегия — face -> pose -> (optional segmentation/person based on flags) -> person -> center
     existing_mask_key = info.get("mask_key")
     overwrite = os.environ.get("HEAD_MASK_OVERWRITE", "0") == "1"
     if existing_mask_key and not overwrite:
@@ -570,7 +570,20 @@ def process_frame(frame_id: int):
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_in:
             tmp_in.write(img_bytes)
             tmp_in_path = tmp_in.name
-        meta, mask_path = generate_head_mask_auto(tmp_in_path, "/tmp/head_mask.png")
+        # Provide presigned original URL to segmentation fallback so Replicate can fetch image
+        force_seg = (info.get("pending_params") or {}).get("force_segmentation_mask") is True
+        # Для форсированной сегментации: временно ставим переменную окружения HEAD_SEGMENT_BEFORE_PERSON=1
+        old_before = os.environ.get("HEAD_SEGMENT_BEFORE_PERSON")
+        if force_seg:
+            os.environ["HEAD_SEGMENT_BEFORE_PERSON"] = "1"
+        try:
+            meta, mask_path = generate_head_mask_auto(tmp_in_path, "/tmp/head_mask.png", ensure_presigned_download(original_url, original_key))
+        finally:
+            if force_seg:
+                if old_before is None:
+                    os.environ.pop("HEAD_SEGMENT_BEFORE_PERSON", None)
+                else:
+                    os.environ["HEAD_SEGMENT_BEFORE_PERSON"] = old_before
         # загрузка маски в S3 (унифицированный ключ)
         mask_key = f"masks/{sku_code}/{frame_id}.png"
         with open(mask_path, "rb") as f:

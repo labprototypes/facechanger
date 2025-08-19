@@ -4,6 +4,7 @@ import numpy as np
 from typing import Optional, Tuple, Dict
 import json
 import httpx
+import io  # for segmentation image download
 
 # Optional YOLO (person detection improves back-facing cases)
 try:
@@ -168,24 +169,88 @@ def _build_mask(shape, box):
     m[y1:y2, x1:x2] = 255
     return m
 
-def _segment_head_mask(image_path: str) -> Optional[Tuple[Dict[str, any], np.ndarray]]:
-    """Fallback segmentation via Replicate lang-segment-anything if configured.
-    Returns (meta, mask_array) or None.
+def _segment_head_mask(image_path: str, image_url: Optional[str], shape: Tuple[int,int]) -> Optional[Tuple[Dict[str, any], np.ndarray]]:
+    """Segmentation via Replicate lang-segment-anything if configured.
+    Requires public/presigned image_url (we can't upload here). Returns (meta, mask_array) or None.
     """
     version = os.environ.get("HEAD_SEGMENT_MODEL_VERSION")
     prompt = os.environ.get("HEAD_SEGMENT_TEXT_PROMPT", "Head")
     token = os.environ.get("REPLICATE_API_TOKEN")
-    if not version or not token:
+    if not version or not token or not image_url:
         return None
     try:
-        # Upload via base64 is not supported; we first need a public/presigned URL.
-        # Here we just skip if image_path not accessible publicly.
-        # For simplicity we do not implement uploading; worker already has another path using this model directly.
-        return None
+        headers = {"Authorization": f"Token {token}", "Content-Type": "application/json"}
+        payload = {"version": version, "input": {"image": image_url, "text_prompt": prompt}}
+        create = httpx.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload, timeout=90)
+        if create.status_code >= 400:
+            return None
+        data = create.json()
+        get_url = (data.get("urls") or {}).get("get")
+        if not get_url:
+            return None
+        # poll
+        import time
+        waited = 0.0
+        step = 2.0
+        max_wait = int(os.environ.get("HEAD_SEGMENT_MAX_WAIT", "180"))
+        while True:
+            r = httpx.get(get_url, headers=headers, timeout=60)
+            if r.status_code >= 400:
+                return None
+            pj = r.json()
+            st = pj.get("status")
+            if st in ("succeeded", "failed", "canceled"):
+                if st != "succeeded":
+                    return None
+                out_url = pj.get("output")
+                if not out_url:
+                    return None
+                if isinstance(out_url, list):
+                    out_url = out_url[0] if out_url else None
+                if not out_url:
+                    return None
+                # download output
+                seg_img_bytes = httpx.get(out_url, timeout=60).content
+                from PIL import Image
+                try:
+                    seg_img = Image.open(io.BytesIO(seg_img_bytes))  # type: ignore
+                except Exception:
+                    return None
+                W, H = shape[1], shape[0]
+                if seg_img.size != (W, H):
+                    seg_img = seg_img.resize((W, H))
+                # alpha or grayscale
+                if seg_img.mode in ("RGBA", "LA"):
+                    alpha = seg_img.split()[-1]
+                    mask_arr = np.array(alpha)
+                else:
+                    gray = seg_img.convert("L")
+                    mask_arr = np.array(gray)
+                mask_bin = (mask_arr > 16).astype(np.uint8) * 255
+                # derive bounding box
+                ys, xs = np.where(mask_bin > 0)
+                if ys.size and xs.size:
+                    y1, y2 = ys.min(), ys.max()
+                    x1, x2 = xs.min(), xs.max()
+                    # extend slightly similar to heuristics
+                    hbb = y2 - y1 + 1
+                    up_extra = int(hbb * 0.25)
+                    down_extra = int(hbb * 0.15)
+                    y1 = max(0, y1 - up_extra)
+                    y2 = min(H - 1, y2 + down_extra)
+                    mask_bin[y1:y2+1, x1:x2+1] = 255
+                    meta = {"strategy": "segment", "box": (int(x1), int(y1), int(x2), int(y2))}
+                else:
+                    return None
+                return meta, mask_bin
+            time.sleep(step)
+            waited += step
+            if waited >= max_wait:
+                return None
     except Exception:
         return None
 
-def generate_head_mask_auto(image_path: str, out_mask_path: str):
+def generate_head_mask_auto(image_path: str, out_mask_path: str, image_url_for_seg: Optional[str] = None):
     img = _load_image(image_path)
     face = _detect_face_box(img)
     if face:
@@ -197,24 +262,30 @@ def generate_head_mask_auto(image_path: str, out_mask_path: str):
         sq = _square_with_margin(pose, img.shape)
         mask = _build_mask(img.shape, sq); cv2.imwrite(out_mask_path, mask)
         return {"strategy":"pose","box":sq}, out_mask_path
+    # Segmentation BEFORE person heuristic if enabled (helps back-facing where face/pose fail)
+    if os.environ.get("HEAD_SEGMENT_BEFORE_PERSON", "1") == "1":
+        seg = _segment_head_mask(image_path, image_url_for_seg, (img.shape[0], img.shape[1]))
+        if seg is not None:
+            meta, mask_arr = seg
+            try:
+                cv2.imwrite(out_mask_path, mask_arr)
+                return meta, out_mask_path
+            except Exception:
+                pass
     person = _detect_person_box(img)
     if person:
         x1,y1,x2,y2 = person
         pw = max(1, x2 - x1)
         ph = max(1, y2 - y1)
-        # Heuristic shoulders/back: define a square whose bottom lies near PERSON_HEAD_TOP_FRAC of person height
         head_bottom = y1 + int(ph * PERSON_HEAD_TOP_FRAC)
         side_from_width = int(pw * PERSON_WIDTH_SCALE)
         side_from_height = int(ph * HEAD_RATIO)
         side = max(32, side_from_width, side_from_height)
-        # center horizontally within person box
         cx = x1 + pw // 2
         y2h = head_bottom
         y1h = y2h - side
-        # add extra upward extension (back hair) if space
         extra_up = int(side * PERSON_EXTRA_UP_FRAC)
         y1h = max(0, y1h - extra_up)
-        # clamp
         if y1h < 0:
             y1h = 0
             y2h = y1h + side
@@ -222,15 +293,16 @@ def generate_head_mask_auto(image_path: str, out_mask_path: str):
         sq = _square_with_margin(head_box, img.shape)
         mask = _build_mask(img.shape, sq); cv2.imwrite(out_mask_path, mask)
         return {"strategy":"person-shoulders","box":sq}, out_mask_path
-    # (Optional) segmentation fallback before naive center
-    seg = _segment_head_mask(image_path)
-    if seg is not None:
-        meta, mask_arr = seg
-        try:
-            cv2.imwrite(out_mask_path, mask_arr)
-            return meta, out_mask_path
-        except Exception:
-            pass
+    # Segmentation AFTER person if not tried yet (or if previously disabled)
+    if os.environ.get("HEAD_SEGMENT_BEFORE_PERSON", "1") != "1":
+        seg = _segment_head_mask(image_path, image_url_for_seg, (img.shape[0], img.shape[1]))
+        if seg is not None:
+            meta, mask_arr = seg
+            try:
+                cv2.imwrite(out_mask_path, mask_arr)
+                return meta, out_mask_path
+            except Exception:
+                pass
     h,w = img.shape[:2]
     side = int(min(h,w)*0.5)
     cx, cy = w//2, int(h*0.35)

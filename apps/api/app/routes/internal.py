@@ -312,6 +312,7 @@ class _RedoBody(BaseModel):
     guidance_scale: float | None = None
     output_format: str | None = None
     num_outputs: int | None = None
+    force_segmentation_mask: bool | None = None
 
 class _MaskBody(BaseModel):
     key: str
