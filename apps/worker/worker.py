@@ -33,6 +33,10 @@ REPLICATE_API_TOKEN = os.environ["REPLICATE_API_TOKEN"]
 # используем именно версию модели (строка версии из Replicate UI)
 REPLICATE_MODEL_VERSION = os.environ["REPLICATE_MODEL_VERSION"]
 
+# Опциональная сегментация головы через отдельную модель (lang-segment-anything)
+HEAD_SEGMENT_MODEL_VERSION = os.environ.get("HEAD_SEGMENT_MODEL_VERSION")  # e.g. tmappdev/lang-segment-anything:<version_sha>
+HEAD_SEGMENT_TEXT_PROMPT = os.environ.get("HEAD_SEGMENT_TEXT_PROMPT", "Head")
+
 # Маска: насколько расширять прямоугольник лица (меньше — уже маска)
 MASK_EXPAND_RATIO = float(os.environ.get("MASK_EXPAND_RATIO", "0.06"))  # base expand (will add head heuristics)
 YOLO_FACE_MODEL = os.environ.get("YOLO_FACE_MODEL", "yolov8n-face.pt")  # custom lightweight face model path/name
@@ -270,6 +274,81 @@ def make_face_mask(image_bgr: np.ndarray, expand_ratio: float) -> np.ndarray:
     return mask
 
 
+# ======== Head segmentation via Replicate (optional) ========
+def replicate_segment_head(image_url: str, width: int, height: int) -> Optional[np.ndarray]:
+    """Пытаемся получить маску головы через сегментационную модель.
+    Возвращает np.ndarray (H,W) uint8 (0/255) или None при неудаче.
+    """
+    if not HEAD_SEGMENT_MODEL_VERSION:
+        return None
+    try:
+        headers = {
+            "Authorization": f"Token {REPLICATE_API_TOKEN}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "version": HEAD_SEGMENT_MODEL_VERSION,
+            "input": {
+                "image": image_url,
+                "text_prompt": HEAD_SEGMENT_TEXT_PROMPT,
+            },
+        }
+        r = httpx.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload, timeout=90)
+        if r.status_code >= 400:
+            print(f"[worker] head-seg create error {r.status_code}: {r.text[:300]}")
+            return None
+        data = r.json()
+        get_url = (data.get("urls") or {}).get("get")
+        if not get_url:
+            return None
+        # poll (reuse replicate_poll but без вебхуков)
+        seg_final = replicate_poll(get_url, max_wait_sec=180, step_sec=2.0)
+        if seg_final.get("status") != "succeeded":
+            print(f"[worker] head-seg status={seg_final.get('status')} detail={seg_final}")
+            return None
+        out_url = seg_final.get("output")
+        if not out_url:
+            return None
+        if isinstance(out_url, list):  # на случай если список
+            out_url = out_url[0] if out_url else None
+        if not out_url:
+            return None
+        # качаем изображение сегментации
+        img_bytes = http_get_bytes(out_url, timeout=60)
+        try:
+            seg_img = Image.open(io.BytesIO(img_bytes))
+        except Exception:
+            return None
+        # приводим к размерам исходного кадра
+        if seg_img.size != (width, height):
+            seg_img = seg_img.resize((width, height))
+        # генерируем бинарную маску: если есть альфа — берём её, иначе threshold по уровню серого
+        if seg_img.mode in ("RGBA", "LA"):
+            alpha = seg_img.split()[-1]
+            mask_arr = np.array(alpha)
+        else:
+            gray = seg_img.convert("L")
+            mask_arr = np.array(gray)
+        # threshold: всё >16 -> 255
+        mask_bin = (mask_arr > 16).astype(np.uint8) * 255
+        # легкое расширение области вверх/вниз как и в make_face_mask (эмуляция)
+        # возьмём bbox ненулевых
+        ys, xs = np.where(mask_bin > 0)
+        if ys.size and xs.size:
+            y1, y2 = ys.min(), ys.max()
+            x1, x2 = xs.min(), xs.max()
+            h = y2 - y1 + 1
+            up_extra = int(h * 0.25)
+            down_extra = int(h * 0.15)
+            y1 = max(0, y1 - up_extra)
+            y2 = min(height - 1, y2 + down_extra)
+            mask_bin[y1:y2+1, x1:x2+1] = 255
+        return mask_bin
+    except Exception as e:
+        print(f"[worker] head-seg exception: {e}")
+        return None
+
+
 # ======== Replicate ========
 def replicate_create_prediction(version: str, input_payload: Dict[str, Any], *, idempotency_key: Optional[str] = None) -> Dict[str, Any]:
     """Create prediction on Replicate with provided model version and inputs."""
@@ -464,7 +543,14 @@ def process_frame(frame_id: int):
     # 2) маска -> в S3 (с фолбэком presigned при необходимости)
     mask_key = f"masks/{sku_code}/{frame_id}.png"
     img, source_image_url = fetch_source_image_bgr(original_url, original_key)
-    mask = make_face_mask(img, expand_ratio=MASK_EXPAND_RATIO)
+    H, W = img.shape[:2]
+    # Попытка сегментации головы через Replicate (если настроено)
+    seg_mask = replicate_segment_head(ensure_presigned_download(original_url, original_key), W, H)
+    if seg_mask is not None:
+        mask = seg_mask
+        print(f"[worker] frame {frame_id}: using head segmentation mask")
+    else:
+        mask = make_face_mask(img, expand_ratio=MASK_EXPAND_RATIO)
     mask_png = _to_png_bytes(mask)
     put_mask_to_s3(mask_key, mask_png)
     
