@@ -15,6 +15,7 @@ except Exception:
     _YOLO_PERSON = None
 
 MARGIN = float(os.environ.get("HEAD_MASK_MARGIN", "0.30"))
+HEAD_MASK_ENLARGE = float(os.environ.get("HEAD_MASK_ENLARGE", "1.25"))  # additional uniform upscale of final square
 MIN_SIZE = int(os.environ.get("HEAD_MASK_MIN_SIZE", "0"))
 HEAD_RATIO = float(os.environ.get("HEAD_FROM_BODY_RATIO", "0.20"))
 PERSON_WIDTH_SCALE = float(os.environ.get("HEAD_PERSON_WIDTH_SCALE", "0.55"))  # how much of person width to use for head square side baseline
@@ -155,6 +156,12 @@ def _square_with_margin(box, shape):
     cx = (x1+x2)//2; cy=(y1+y2)//2
     x1 = cx - side//2; y1 = cy - side//2
     x2 = x1 + side; y2 = y1 + side
+    # enlarge uniformly
+    if HEAD_MASK_ENLARGE > 1.0:
+        side2 = int(side * HEAD_MASK_ENLARGE)
+        cx = (x1 + x2)//2; cy = (y1 + y2)//2
+        x1 = cx - side2//2; y1 = cy - side2//2
+        x2 = x1 + side2; y2 = y1 + side2
     if x1 < 0: x2 += -x1; x1=0
     if y1 < 0: y2 += -y1; y1=0
     if x2 > w: shift = x2-w; x1 -= shift; x2=w
@@ -232,13 +239,27 @@ def _segment_head_mask(image_path: str, image_url: Optional[str], shape: Tuple[i
                 if ys.size and xs.size:
                     y1, y2 = ys.min(), ys.max()
                     x1, x2 = xs.min(), xs.max()
-                    # extend slightly similar to heuristics
                     hbb = y2 - y1 + 1
                     up_extra = int(hbb * 0.25)
                     down_extra = int(hbb * 0.15)
                     y1 = max(0, y1 - up_extra)
                     y2 = min(H - 1, y2 + down_extra)
-                    mask_bin[y1:y2+1, x1:x2+1] = 255
+                    # Apply enlarge factor to bounding square derived from bbox
+                    bw = x2 - x1; bh = y2 - y1
+                    side = max(bw, bh)
+                    cx = (x1 + x2)//2; cy = (y1 + y2)//2
+                    if HEAD_MASK_ENLARGE > 1.0:
+                        side = int(side * HEAD_MASK_ENLARGE)
+                    x1 = cx - side//2; y1 = cy - side//2
+                    x2 = x1 + side; y2 = y1 + side
+                    # clamp
+                    if x1 < 0: x2 += -x1; x1 = 0
+                    if y1 < 0: y2 += -y1; y1 = 0
+                    if x2 > W: shift = x2 - W; x1 -= shift; x2 = W
+                    if y2 > H: shift = y2 - H; y1 -= shift; y2 = H
+                    x1 = max(0,x1); y1 = max(0,y1)
+                    mask_bin.fill(0)
+                    mask_bin[y1:y2, x1:x2] = 255
                     meta = {"strategy": "segment", "box": (int(x1), int(y1), int(x2), int(y2))}
                 else:
                     return None
