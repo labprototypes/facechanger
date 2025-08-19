@@ -445,13 +445,19 @@ def process_frame(frame_id: int):
         raise RuntimeError("No model_version available (head.model_version or REPLICATE_MODEL_VERSION env)")
     # пользовательские pending_params (internal.redo сохранил их в pending_params frame)
     pending = info.get("pending_params") or {}
-    def _p(name, default):
-        return pending.get(name, default)
+    # Defaults from head.params (if provided) now merged before applying pending overrides
+    head_params = head.get("params") or {}
+    def _p(name, fallback):
+        if name in pending:  # explicit user override (redo)
+            return pending[name]
+        if name in head_params:  # per-head default
+            return head_params[name]
+        return fallback
     input_dict = {
         "prompt": pending.get("prompt", prompt),
         "prompt_strength": _p("prompt_strength", 0.8),
         "num_outputs": _p("num_outputs", 3),
-        "num_inference_steps": _p("num_inference_steps", 28),
+        "num_inference_steps": _p("num_inference_steps", 28),  # base fallback (may be overridden above)
         "guidance_scale": _p("guidance_scale", 3),
         "output_format": _p("output_format", "png"),
         "image": image_url_for_model,
