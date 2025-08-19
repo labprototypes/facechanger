@@ -10,7 +10,7 @@ import useSWR from "swr";
 const BG = "#f5f5f5"; const TEXT = "#000000"; const SURFACE = "#ffffff"; const ACCENT = "#B8FF01";
 
 interface BatchSummary { date: string; total: number; inProgress: number; done: number; failed: number; }
-interface SkuRow { id: number; sku: string; headProfile?: string | null | number; frames: number; done: number; status: "IN_PROGRESS" | "DONE" | "FAILED"; updatedAt: string; }
+interface SkuRow { id: number; sku: string; brand?: string | null; headProfile?: string | null | number; frames: number; done: number; status: "IN_PROGRESS" | "DONE" | "FAILED"; updatedAt: string; }
 
 const fetcher = (u: string) => fetch(u).then(r => { if(!r.ok) throw new Error(r.statusText); return r.json(); });
 
@@ -28,7 +28,12 @@ export default function DashboardBatches() {
   const [statusFilter, setStatusFilter] = useState<"ALL" | SkuRow["status"]>("ALL");
 
   useEffect(()=>{ if(batches.length && !activeDate) setActiveDate(batches[0].date); }, [batches, activeDate]);
-  const { data: skusResp, error: skusError, mutate: refetchSkus } = useSWR<{items: SkuRow[]}>(activeDate ? `${dashBase}/skus?date=${activeDate}` : null, fetcher, { refreshInterval: 5000 });
+  const [brands, setBrands] = useState<string[]>(["Sportmaster","Love Republic","Lamoda"]);
+  const [activeBrand, setActiveBrand] = useState<string>("Sportmaster");
+  useEffect(()=>{
+    fetch(`${dashBase}/brands`).then(r=>r.ok?r.json():Promise.reject()).then(d=>{ if(d.items?.length){ setBrands(d.items); if(!d.items.includes(activeBrand)) setActiveBrand(d.items[0]); }}).catch(()=>{});
+  },[]);
+  const { data: skusResp, error: skusError, mutate: refetchSkus } = useSWR<{items: SkuRow[]}>(activeDate && activeBrand ? `${dashBase}/skus?date=${activeDate}&brand=${encodeURIComponent(activeBrand)}` : null, fetcher, { refreshInterval: 5000 });
   const rowsRaw = skusResp?.items || [];
   const rows = useMemo(() => rowsRaw.filter(r => statusFilter === "ALL" ? true : r.status === statusFilter), [rowsRaw, statusFilter]);
 
@@ -60,10 +65,19 @@ export default function DashboardBatches() {
 
         <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3">
           <div className="rounded-2xl p-4 border border-black/10 flex items-center justify-between gap-2" style={{ background: SURFACE }}>
-            <div className="flex items-center gap-2"><CalendarDays size={18} /><span className="font-medium">Выбранный день:</span><span>{activeDate || '—'}</span></div>
+            <div className="flex items-center gap-2"><CalendarDays size={18} /><span className="font-medium">День:</span><span>{activeDate || '—'}</span></div>
             <div className="flex items-center gap-2">
               <button onClick={prevDay} className="p-2 rounded-xl border" style={{ background: SURFACE }} aria-label="Предыдущий день"><ChevronLeft size={18} /></button>
               <button onClick={nextDay} className="p-2 rounded-xl border" style={{ background: SURFACE }} aria-label="Следующий день"><ChevronRight size={18} /></button>
+            </div>
+          </div>
+          <div className="rounded-2xl p-4 border border-black/10" style={{ background: SURFACE }}>
+            <div className="text-sm opacity-80 mb-1">Бренд</div>
+            <div className="flex gap-2 flex-wrap">
+              {brands.map(b => {
+                const act = b === activeBrand;
+                return <button key={b} onClick={()=>{setActiveBrand(b);}} className={`px-3 py-1 rounded-full border text-sm ${act?'font-semibold':''}`} style={{ background: act? ACCENT : SURFACE }}>{b}</button>;
+              })}
             </div>
           </div>
 
@@ -106,7 +120,7 @@ export default function DashboardBatches() {
 
         <div className="rounded-2xl border border-black/10 overflow-hidden" style={{ background: SURFACE }}>
           <div className="grid grid-cols-12 px-4 py-3 border-b border-black/10 text-sm font-medium">
-            <div className="col-span-3">SKU</div><div className="col-span-2">Head Profile</div><div className="col-span-2">Кадров</div><div className="col-span-3">Прогресс</div><div className="col-span-2">Обновлено</div>
+            <div className="col-span-3">SKU</div><div className="col-span-2">Бренд</div><div className="col-span-1">Head</div><div className="col-span-2">Кадров</div><div className="col-span-2">Прогресс</div><div className="col-span-2">Обновлено</div>
           </div>
           <div>
             {rows.map((r) => {
@@ -127,9 +141,10 @@ export default function DashboardBatches() {
                     </button>
                     <button onClick={() => { if(confirm(`Удалить SKU ${r.sku}?`)){ fetch(`${apiBase}/api/skus/${r.sku}`, { method: 'DELETE'}).then(()=> refetchSkus()); } }} className="mt-1 text-[10px] px-2 py-1 rounded border border-red-400 text-red-600">Удалить</button>
                   </div>
-                  <div className="col-span-2 opacity-80">{r.headProfile || '—'}</div>
+                  <div className="col-span-2 opacity-80">{r.brand || '—'}</div>
+                  <div className="col-span-1 opacity-80">{r.headProfile || '—'}</div>
                   <div className="col-span-2 opacity-80">{r.done}/{r.frames} ({p}%)</div>
-                  <div className="col-span-3">
+                  <div className="col-span-2">
                     <div className="h-2 w-full rounded-full bg-black/10 overflow-hidden"><div className="h-full" style={{ width: `${p}%`, background: ACCENT }} /></div>
                     <div className="text-xs mt-1 opacity-70">{badge}</div>
                   </div>

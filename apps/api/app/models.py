@@ -40,6 +40,7 @@ class SKU(Base):
     code: Mapped[str] = mapped_column(String(120), unique=False, index=True)
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("batches.id"), nullable=True)
     head_profile_id: Mapped[int | None] = mapped_column(ForeignKey("head_profiles.id"), nullable=True)
+    brand: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     created_at: Mapped = mapped_column(DateTime, server_default=func.now())
 
     head: Mapped["HeadProfile"] = relationship()

@@ -1,0 +1,5 @@
+Alembic migrations for facechanger API.
+Generate new migration:
+  alembic revision --autogenerate -m "message"
+Apply latest:
+  alembic upgrade head

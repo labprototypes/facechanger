@@ -4,12 +4,12 @@ import boto3
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from ..store import (
-    SKU_BY_CODE, next_sku_id, next_frame_id,
-    FRAMES, SKU_FRAMES, SKUS_BY_ID, register_sku,
-    register_frame, get_frame, list_frames_for_sku, FRAME_GENERATIONS, GENERATIONS_BY_ID,
-    HEADS
+    SKU_BY_CODE, register_sku, register_frame, get_frame, list_frames_for_sku,
+    FRAME_GENERATIONS, GENERATIONS_BY_ID, HEADS, delete_frame, delete_sku,
+    get_sku_by_code
 )
-from ..store import delete_frame, delete_sku
+import os
+USE_DB = bool(os.environ.get("DATABASE_URL"))
 from ..celery_client import queue_process_sku, queue_process_frame
 
 router = APIRouter(prefix="/skus", tags=["skus"])
@@ -48,12 +48,17 @@ class SubmitReq(BaseModel):
     items: List[SubmitItem]
     head_id: Optional[int] = 1  # ссылка на head profile/registry (in-memory HEADS)
     enqueue: bool = True
+    brand: Optional[str] = None
 
-def _ensure_sku(code: str) -> int:
+def _ensure_sku(code: str, brand: Optional[str] = None) -> int:
+    if USE_DB:
+        sku = get_sku_by_code(code)
+        if sku:
+            return sku["id"]
+        return register_sku(code, brand=brand)
     if code in SKU_BY_CODE:
         return SKU_BY_CODE[code]
-    sid = register_sku(code)
-    return sid
+    return register_sku(code, brand=brand)
 
 @router.post("/{sku_code}/upload-urls")
 def create_upload_urls(sku_code: str, body: UploadUrlsReq):
@@ -83,7 +88,7 @@ def submit_sku(sku_code: str, body: SubmitReq):
     if len(body.items) > 10:
         raise HTTPException(422, "maximum 10 items per submit")
 
-    sku_id = _ensure_sku(sku_code)
+    sku_id = _ensure_sku(sku_code, brand=body.brand)
 
     frame_ids: List[int] = []
     head_obj = HEADS.get(body.head_id) if body.head_id else None
@@ -108,9 +113,15 @@ def submit_sku(sku_code: str, body: SubmitReq):
 def sku_view_simple(sku_code: str):
     """Simple SKU view used by legacy frontend call /skus/{code}.
     Returns frames with basic status and generation counts."""
-    if sku_code not in SKU_BY_CODE:
-        raise HTTPException(404, "sku not found")
-    sku_id = SKU_BY_CODE[sku_code]
+    if USE_DB:
+        sku = get_sku_by_code(sku_code)
+        if not sku:
+            raise HTTPException(404, "sku not found")
+        sku_id = sku["id"]
+    else:
+        if sku_code not in SKU_BY_CODE:
+            raise HTTPException(404, "sku not found")
+        sku_id = SKU_BY_CODE[sku_code]
     frames = list_frames_for_sku(sku_id)
     items: List[Dict[str, Any]] = []
     for fr in frames:
@@ -121,32 +132,66 @@ def sku_view_simple(sku_code: str):
             "status": fr.get("status", "queued"),
             "generations": len(gens),
         })
-    return {"sku": {"id": sku_id, "code": sku_code}, "frames": items}
+    # include brand if available (DB or in-memory)
+    brand = None
+    if USE_DB:
+        sku = get_sku_by_code(sku_code)
+        brand = sku.get("brand") if sku else None
+    else:
+        sid = SKU_BY_CODE.get(sku_code)
+        sku = None
+        if sid:
+            from ..store import SKUS_BY_ID as _SKUS
+            sku = _SKUS.get(sid)
+        brand = sku.get("brand") if sku else None
+    return {"sku": {"id": sku_id, "code": sku_code, "brand": brand}, "frames": items}
 
 @router.get("/{sku_code}/frames")
 def list_sku_frames(sku_code: str):
-    if sku_code not in SKU_BY_CODE:
-        raise HTTPException(404, "sku not found")
-    sku_id = SKU_BY_CODE[sku_code]
+    if USE_DB:
+        sku = get_sku_by_code(sku_code)
+        if not sku:
+            raise HTTPException(404, "sku not found")
+        sku_id = sku["id"]
+    else:
+        if sku_code not in SKU_BY_CODE:
+            raise HTTPException(404, "sku not found")
+        sku_id = SKU_BY_CODE[sku_code]
     frames = list_frames_for_sku(sku_id)
-    return {"items": frames}
+    return {"items": frames, "brand": (get_sku_by_code(sku_code) or {}).get("brand")}
 
 @router.delete("/{sku_code}")
 def delete_sku_public(sku_code: str):
-    if sku_code not in SKU_BY_CODE:
-        raise HTTPException(404, "sku not found")
-    delete_sku(sku_code)
+    if USE_DB:
+        sku = get_sku_by_code(sku_code)
+        if not sku:
+            raise HTTPException(404, "sku not found")
+        delete_sku(sku_code)
+    else:
+        if sku_code not in SKU_BY_CODE:
+            raise HTTPException(404, "sku not found")
+        delete_sku(sku_code)
     return {"ok": True, "deleted": sku_code}
 
 @router.delete("/{sku_code}/frame/{frame_id}")
 def delete_frame_public(sku_code: str, frame_id: int):
-    if sku_code not in SKU_BY_CODE:
-        raise HTTPException(404, "sku not found")
-    fr = get_frame(int(frame_id))
-    if not fr:
-        raise HTTPException(404, "frame not found")
-    if fr.get("sku", {}).get("id") != SKU_BY_CODE[sku_code]:
-        raise HTTPException(400, "frame does not belong to sku")
+    if USE_DB:
+        sku = get_sku_by_code(sku_code)
+        if not sku:
+            raise HTTPException(404, "sku not found")
+        fr = get_frame(int(frame_id))
+        if not fr:
+            raise HTTPException(404, "frame not found")
+        if fr.get("sku", {}).get("id") != sku["id"]:
+            raise HTTPException(400, "frame does not belong to sku")
+    else:
+        if sku_code not in SKU_BY_CODE:
+            raise HTTPException(404, "sku not found")
+        fr = get_frame(int(frame_id))
+        if not fr:
+            raise HTTPException(404, "frame not found")
+        if fr.get("sku", {}).get("id") != SKU_BY_CODE[sku_code]:
+            raise HTTPException(400, "frame does not belong to sku")
     delete_frame(int(frame_id))
     return {"ok": True, "deleted_frame_id": int(frame_id)}
 

@@ -30,21 +30,14 @@ from pydantic import BaseModel
 
 # ---- store API (функции должны быть реализованы в apps/api/app/store.py) ----
 from ..store import (
-    # кадры / sku
-    list_frames_for_sku,         # (sku_id: int) -> List[int] | List[dict]
-    get_frame,                   # (frame_id: int) -> dict | None
-    set_frame_status,            # (frame_id: int, status: str) -> None
-    # генерации
-    register_generation,         # (frame_id: int) -> int
-    save_generation_prediction,  # (generation_id: int, prediction_id: str) -> None
-    generations_for_frame,       # (frame_id: int) -> List[dict]
-    set_generation_outputs,      # (generation_id: int, outputs: List[str]) -> None
-    set_frame_outputs,            # (frame_id: int, outputs: List[str]) -> None
-    append_frame_outputs_version, # (frame_id: int, outputs: List[str]) -> None
-    set_frame_favorites, get_frame_favorites,
-    SKU_BY_CODE,
-    delete_frame, delete_sku,
+    list_frames_for_sku, get_frame, set_frame_status,
+    register_generation, save_generation_prediction, generations_for_frame,
+    set_generation_outputs, set_frame_outputs, append_frame_outputs_version,
+    set_frame_favorites, get_frame_favorites, get_sku_by_code,
+    get_all_sku_codes, list_sku_codes_by_date,
+    SKU_BY_CODE, delete_frame, delete_sku
 )
+USE_DB = bool(os.environ.get("DATABASE_URL"))
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -204,10 +197,15 @@ def internal_health():
 
 @router.get("/sku/by-code/{code}/view")
 def internal_sku_view_by_code(code: str):
-    from ..store import SKU_BY_CODE
-    if code not in SKU_BY_CODE:
-        raise HTTPException(status_code=404, detail="sku not found")
-    sid = SKU_BY_CODE[code]
+    if USE_DB:
+        sku = get_sku_by_code(code)
+        if not sku:
+            raise HTTPException(status_code=404, detail="sku not found")
+        sid = sku["id"]
+    else:
+        if code not in SKU_BY_CODE:
+            raise HTTPException(status_code=404, detail="sku not found")
+        sid = SKU_BY_CODE[code]
     frames = list_frames_for_sku(sid) or []
     items = []
     for fr in frames:
@@ -418,10 +416,15 @@ def internal_redo_frame(frame_id: int, body: _RedoBody):
 @router.get("/sku/by-code/{code}/export-urls")
 def internal_export_urls(code: str):
     """Вернёт плоский список всех output URL по SKU (для копирования)."""
-    from ..store import SKU_BY_CODE
-    if code not in SKU_BY_CODE:
-        raise HTTPException(status_code=404, detail="sku not found")
-    sid = SKU_BY_CODE[code]
+    if USE_DB:
+        sku = get_sku_by_code(code)
+        if not sku:
+            raise HTTPException(status_code=404, detail="sku not found")
+        sid = sku["id"]
+    else:
+        if code not in SKU_BY_CODE:
+            raise HTTPException(status_code=404, detail="sku not found")
+        sid = SKU_BY_CODE[code]
     frames = list_frames_for_sku(sid) or []
     urls: list[str] = []
     for fr in frames:
@@ -464,9 +467,15 @@ def internal_download_favorites_zip(code: str):
     from io import BytesIO
     import zipfile
     # SKU_BY_CODE already imported
-    if code not in SKU_BY_CODE:
-        raise HTTPException(status_code=404, detail="sku not found")
-    sid = SKU_BY_CODE[code]
+    if USE_DB:
+        sku = get_sku_by_code(code)
+        if not sku:
+            raise HTTPException(status_code=404, detail="sku not found")
+        sid = sku["id"]
+    else:
+        if code not in SKU_BY_CODE:
+            raise HTTPException(status_code=404, detail="sku not found")
+        sid = SKU_BY_CODE[code]
     frames = list_frames_for_sku(sid) or []
     # collect favorite keys
     fav_items: list[tuple[str,str]] = []  # (key, arcname)
@@ -498,16 +507,25 @@ def internal_download_batch_export(date: str):
     # batch = все SKU созданные в этот date
     # Для каждого SKU включаем только избранные (если есть), иначе ничего.
     sku_codes: list[str] = []
-    for code, sid in list(SKU_BY_CODE.items()):
-        frs = list_frames_for_sku(sid) or []
-        # проверим дату по первому фрейму или времени SKU (упрощение)
-        # (в store нет батча явно, пропускаем сложную фильтрацию)
-        sku_codes.append(code)
+    if USE_DB:
+        sku_codes.extend(list_sku_codes_by_date(date))
+    else:
+        for code, sid in list(SKU_BY_CODE.items()):
+            # фильтрацию по дате опускаем (in-memory store без точной привязки) — отдаём все
+            sku_codes.append(code)
     buf = BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         s3c = _s3_client()
         for code in sku_codes:
-            sid = SKU_BY_CODE[code]
+            if USE_DB:
+                sku = get_sku_by_code(code)
+                if not sku:
+                    continue
+                sid = sku["id"]
+            else:
+                sid = SKU_BY_CODE.get(code)
+                if not sid:
+                    continue
             frames = list_frames_for_sku(sid) or []
             any_added = False
             for fr in frames:

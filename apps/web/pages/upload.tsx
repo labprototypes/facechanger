@@ -51,12 +51,12 @@ async function putToS3(file: File, putUrl: string) {
 }
 
 /** шаг 3: регистрация кадров + постановка в очередь воркеру */
-async function submitSku(sku: string, items: { key: string; name: string }[], headId: number | null) {
+async function submitSku(sku: string, items: { key: string; name: string }[], headId: number | null, brand: string | null) {
   const base = apiBase ? `${apiBase}` : '';
   const res = await fetch(`${base}/api/skus/${encodeURIComponent(sku)}/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ items, enqueue: true, head_id: headId }),
+  body: JSON.stringify({ items, enqueue: true, head_id: headId, brand }),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
@@ -96,14 +96,19 @@ export default function UploadBySkuPage() {
   const [headId, setHeadId] = useState<number | null>(null);
   const [stage, setStage] = useState<Stage>("idle");
   const [msg, setMsg] = useState<string>("");
+  const [brand, setBrand] = useState<string>("Sportmaster");
+  const [brands, setBrands] = useState<string[]>(["Sportmaster","Love Republic","Lamoda"]);
 
   useEffect(() => {
-  const base = apiBase ? `${apiBase}` : '';
-  fetch(`${base}/api/heads`).then(r => {
-      if(!r.ok) throw new Error(String(r.status));
-      return r.json();
-    }).then(setHeads).catch(()=>{});
-  }, []);
+    const base = apiBase ? `${apiBase}` : '';
+    fetch(`${base}/api/heads`).then(r => { if(!r.ok) throw new Error(String(r.status)); return r.json(); }).then(setHeads).catch(()=>{});
+    fetch(`${base}/api/dashboard/brands`).then(r => r.ok ? r.json() : Promise.reject()).then(d => {
+      if(d.items?.length){
+        setBrands(d.items);
+        if(!d.items.includes(brand)) setBrand(d.items[0]);
+      }
+    }).catch(()=>{});
+  }, [brand]);
 
   const disabled = useMemo(
     () =>
@@ -148,7 +153,7 @@ export default function UploadBySkuPage() {
 
       setStage("submitting");
       setMsg("Регистрируем кадры и ставим в очередь...");
-  const resp = await submitSku(sku.trim(), items, headId);
+  const resp = await submitSku(sku.trim(), items, headId, brand);
 
       setStage("done");
       setMsg(
@@ -173,6 +178,17 @@ export default function UploadBySkuPage() {
         </p>
 
         <div className="mt-6 grid gap-4">
+          <div>
+            <label className="text-sm opacity-80">Бренд</label>
+            <select
+              className="mt-1 w-full px-3 py-2 rounded-xl border border-black/10"
+              style={{ background: SURFACE, color: TEXT }}
+              value={brand}
+              onChange={e => setBrand(e.target.value)}
+            >
+              {brands.map(b => <option key={b}>{b}</option>)}
+            </select>
+          </div>
           <div>
             <label className="text-sm opacity-80">SKU</label>
             <input
