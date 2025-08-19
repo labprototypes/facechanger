@@ -3,6 +3,14 @@ import cv2
 import numpy as np
 from typing import Optional, Tuple, Dict
 
+# Optional YOLO (person detection improves back-facing cases)
+try:
+    from ultralytics import YOLO  # type: ignore
+    _YOLO_PERSON_MODEL = os.environ.get("HEAD_YOLO_MODEL", "yolov8n.pt")
+    _YOLO_PERSON = YOLO(_YOLO_PERSON_MODEL)
+except Exception:
+    _YOLO_PERSON = None
+
 MARGIN = float(os.environ.get("HEAD_MASK_MARGIN", "0.30"))
 MIN_SIZE = int(os.environ.get("HEAD_MASK_MIN_SIZE", "0"))
 HEAD_RATIO = float(os.environ.get("HEAD_FROM_BODY_RATIO", "0.20"))
@@ -94,6 +102,31 @@ def _detect_pose_head_box(img) -> Optional[Tuple[int,int,int,int]]:
     return (x1,y1,x2,y2)
 
 def _detect_person_box(img)->Optional[Tuple[int,int,int,int]]:
+    # YOLO first (works for back views)
+    if _YOLO_PERSON is not None and os.environ.get("HEAD_USE_YOLO", "1") == "1":
+        try:
+            res = _YOLO_PERSON(img, verbose=False)
+            best=None; best_conf=0.0
+            for r in res:
+                if not getattr(r, 'boxes', None):
+                    continue
+                for b in r.boxes:
+                    cls = int(b.cls.item()) if hasattr(b.cls, 'item') else int(b.cls)
+                    if cls != 0:  # class 0 = person
+                        continue
+                    conf = float(b.conf.item()) if hasattr(b.conf, 'item') else float(b.conf)
+                    if conf < float(os.environ.get("HEAD_PERSON_CONF", "0.35")):
+                        continue
+                    x1,y1,x2,y2 = map(int, b.xyxy[0].tolist())
+                    if x2<=x1 or y2<=y1: continue
+                    area = (x2-x1)*(y2-y1)
+                    if conf > best_conf or (conf == best_conf and best and area > (best[2]-best[0])*(best[3]-best[1])):
+                        best=(x1,y1,x2,y2); best_conf=conf
+            if best:
+                return best
+        except Exception:
+            pass
+    # HOG fallback
     try:
         hog = cv2.HOGDescriptor()
         hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
