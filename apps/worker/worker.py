@@ -8,6 +8,12 @@ import httpx
 import numpy as np
 import cv2
 from PIL import Image
+try:
+    from ultralytics import YOLO  # YOLOv8
+    _YOLO_MODEL_LOAD_ERROR = None
+except Exception as e:  # ultralytics may not be installed yet
+    YOLO = None
+    _YOLO_MODEL_LOAD_ERROR = str(e)
 import boto3
 import re
 
@@ -28,7 +34,22 @@ REPLICATE_API_TOKEN = os.environ["REPLICATE_API_TOKEN"]
 REPLICATE_MODEL_VERSION = os.environ["REPLICATE_MODEL_VERSION"]
 
 # Маска: насколько расширять прямоугольник лица (меньше — уже маска)
-MASK_EXPAND_RATIO = float(os.environ.get("MASK_EXPAND_RATIO", "0.06"))  # было 0.10
+MASK_EXPAND_RATIO = float(os.environ.get("MASK_EXPAND_RATIO", "0.06"))  # base expand (will add head heuristics)
+YOLO_FACE_MODEL = os.environ.get("YOLO_FACE_MODEL", "yolov8n-face.pt")  # custom lightweight face model path/name
+_YOLO_FACE = None
+
+def _get_yolo_face_model():
+    global _YOLO_FACE
+    if _YOLO_FACE is not None:
+        return _YOLO_FACE
+    if YOLO is None:
+        return None
+    try:
+        _YOLO_FACE = YOLO(YOLO_FACE_MODEL)
+    except Exception as e:
+        print(f"[worker] failed to load YOLO face model: {e}")
+        _YOLO_FACE = None
+    return _YOLO_FACE
 
 # ======== Celery ========
 celery = Celery("worker", broker=REDIS_URL, backend=REDIS_URL)
@@ -187,26 +208,64 @@ def _expand_rect(x: int, y: int, w: int, h: int, expand_px: int, W: int, H: int)
 
 
 def make_face_mask(image_bgr: np.ndarray, expand_ratio: float) -> np.ndarray:
+    """Detect face using YOLO if available, fallback to Haar, then enlarge to approximate full head.
+    Strategy:
+      - Run YOLO face detector (single largest face)
+      - If unavailable / no detections -> Haar cascade
+      - Expand box: widen by expand_ratio * W, then extend upward an additional 40% of box height
+        and downward 20% to include hair + neck region.
+    """
     H, W = image_bgr.shape[:2]
-    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-
-    # Стандартный каскад лиц из OpenCV
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(64, 64))
-
     mask = np.zeros((H, W), dtype=np.uint8)
-    if len(faces) == 0:
-        # Фолбек (центр, чтобы не падать): примерно область головы
-        w = int(W * 0.22)
-        h = int(H * 0.32)
-        x = W // 2 - w // 2
-        y = H // 4
-        faces = [(x, y, w, h)]
+    face_boxes: list[tuple[int,int,int,int]] = []
 
-    for (x, y, w, h) in faces:
-        expand_px = int(W * expand_ratio)  # Жёсткий край — прямоугольник
+    model = _get_yolo_face_model()
+    if model is not None:
+        try:
+            # YOLO expects RGB
+            import math
+            results = model.predict(image_bgr[..., ::-1], verbose=False)
+            for r in results:
+                boxes = r.boxes.xyxy.cpu().numpy() if getattr(r, 'boxes', None) else []
+                for b in boxes:
+                    x1, y1, x2, y2 = b[:4]
+                    w = int(x2 - x1)
+                    h = int(y2 - y1)
+                    x = int(x1)
+                    y = int(y1)
+                    if w > 20 and h > 20:
+                        face_boxes.append((x, y, w, h))
+            # keep largest
+            if face_boxes:
+                face_boxes.sort(key=lambda b: b[2]*b[3], reverse=True)
+                face_boxes = [face_boxes[0]]
+        except Exception as e:
+            print(f"[worker] YOLO face inference failed: {e}")
+
+    if not face_boxes:
+        # fallback Haar
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(64, 64))
+        for (x, y, w, h) in faces:
+            face_boxes.append((int(x), int(y), int(w), int(h)))
+        if not face_boxes:
+            # heuristic center fallback
+            w = int(W * 0.22)
+            h = int(H * 0.32)
+            x = W // 2 - w // 2
+            y = H // 4
+            face_boxes = [(x, y, w, h)]
+
+    for (x, y, w, h) in face_boxes:
+        expand_px = int(W * expand_ratio)
         x, y, w, h = _expand_rect(x, y, w, h, expand_px, W, H)
-        mask[y:y + h, x:x + w] = 255
+        # head extension: extend upward 40% of box height, downward 20%
+        up_extra = int(h * 0.40)
+        down_extra = int(h * 0.20)
+        new_y = max(0, y - up_extra)
+        new_h = min(H - new_y, h + up_extra + down_extra)
+        mask[new_y:new_y + new_h, x:x + w] = 255
 
     return mask
 
