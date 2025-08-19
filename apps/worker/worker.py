@@ -652,7 +652,7 @@ def process_frame(frame_id: int):
         "prompt": pending.get("prompt", prompt),
         "prompt_strength": _p("prompt_strength", 0.8),
         "num_outputs": _p("num_outputs", 3),
-        "num_inference_steps": _p("num_inference_steps", 28),  # base fallback (may be overridden above)
+    "num_inference_steps": _p("num_inference_steps", 50),  # updated global default 50
         "guidance_scale": _p("guidance_scale", 3),
         "output_format": _p("output_format", "png"),
         "image": image_url_for_model,

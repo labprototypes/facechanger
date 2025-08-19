@@ -41,7 +41,7 @@ app.include_router(internal_router)
 # Seed predefined heads (cleaned & updated)
 DEFAULT_HEAD_PARAMS = {
     "prompt_strength": 0.8,
-    "num_inference_steps": 40,
+    "num_inference_steps": 50,
     "guidance_scale": 2,
     "num_outputs": 3,
     "output_format": "png",

@@ -25,7 +25,8 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
   const [mode, setMode] = useState<"view"|"tune"|"rerun">("view");
   const [accepted, setAccepted] = useState(false);
   const [showMask, setShowMask] = useState(false);
-  const [prompt, setPrompt] = useState(frame.pending_params?.prompt || "");
+  const initialPrompt = frame.pending_params?.prompt || frame.head?.prompt_template?.replace?.("{token}", frame.head?.trigger_token || frame.head?.trigger || "") || "";
+  const [prompt, setPrompt] = useState(initialPrompt);
   const [promptStrength, setPromptStrength] = useState(frame.pending_params?.prompt_strength ?? 0.8);
   const [steps, setSteps] = useState(frame.pending_params?.num_inference_steps ?? 28);
   const [guidanceScale, setGuidanceScale] = useState(frame.pending_params?.guidance_scale ?? 3);
@@ -85,17 +86,25 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <div className="aspect-square bg-black/10 rounded-lg overflow-hidden relative flex items-center justify-center">
-          {original ? (<img src={original} alt="orig" className="object-cover w-full h-full" />) : (<span className="text-xs opacity-50">Оригинал</span>)}
+      <div className="flex gap-2 mb-3">
+        <div className="w-20 h-20 rounded-lg overflow-hidden flex items-center justify-center bg-black/10">
+          {original ? <img src={original} alt="orig" className="object-cover w-full h-full"/> : <span className="text-[10px] opacity-50">Оригинал</span>}
         </div>
-        <div className="aspect-square rounded-lg overflow-hidden relative flex items-center justify-center" style={{ background: showMask ? ACCENT : "#0000000d" }}>
-          {showMask && maskUrl ? (
-            <img src={maskUrl} alt="mask" className="object-contain w-full h-full mix-blend-multiply" />
-          ) : (
-            <span className="text-xs opacity-60">Маска</span>
-          )}
+        <div className="w-20 h-20 rounded-lg overflow-hidden flex items-center justify-center" style={{ background: maskUrl? (showMask? ACCENT : "#0000000d") : "#0000000d" }} onClick={()=> maskUrl && setShowMask(v=>!v)}>
+          {maskUrl && showMask ? <img src={maskUrl} alt="mask" className="object-contain w-full h-full mix-blend-multiply"/> : <span className="text-[10px] opacity-60">Маска</span>}
         </div>
+        {([...(versions[0]||[]), ...outs].slice(0,3)).map((o:any, idx:number)=>{
+          const key = o.key || o;
+          const isFav = favKeys.includes(key);
+          return (
+            <div key={idx} className="relative w-20 h-20 rounded-lg overflow-hidden border flex items-center justify-center bg-black/5">
+              <button onClick={()=>onPreview(idx, frame)} className="absolute inset-0 hover:opacity-80">
+                <img src={o.url || o} alt={`g${idx}`} className="object-cover w-full h-full"/>
+              </button>
+              <button onClick={()=>toggleFavorite(key)} className={`absolute bottom-1 right-1 w-5 h-5 rounded-md text-[9px] flex items-center justify-center border ${isFav? 'bg-lime-300':'bg-white/80'} transition-none`}>★</button>
+            </div>
+          );
+        })}
       </div>
 
       {mode === "view" && (
@@ -112,7 +121,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
                       <button onClick={() => onPreview(idx, frame)} className="aspect-square w-full bg-black/5 rounded overflow-hidden flex items-center justify-center hover:opacity-80 border">
                         <img src={o.url || o} alt={`v${vi+1}-${idx+1}`} className="object-cover w-full h-full" />
                       </button>
-                      <button title={isFav? 'Убрать из избранного':'В избранное'} onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border transition ${isFav? 'bg-lime-300':'bg-white/80 hover:bg-white'} shadow`}>★</button>
+                      <button title={isFav? 'Убрать из избранного':'В избранное'} onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border ${isFav? 'bg-lime-300':'bg-white/80'} transition-none shadow`}>★</button>
                     </div>
                   );
                 })}
@@ -129,7 +138,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
                     <button onClick={() => onPreview(idx, frame)} className="aspect-square w-full bg-black/5 rounded overflow-hidden flex items-center justify-center hover:opacity-80 border">
                       <img src={o.url || o} alt={`v${idx+1}`} className="object-cover w-full h-full" />
                     </button>
-                    <button title={isFav? 'Убрать из избранного':'В избранное'} onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border transition ${isFav? 'bg-lime-300':'bg-white/80 hover:bg-white'} shadow`}>★</button>
+                    <button title={isFav? 'Убрать из избранного':'В избранное'} onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border ${isFav? 'bg-lime-300':'bg-white/80'} transition-none shadow`}>★</button>
                   </div>
                 );
               })}
@@ -170,7 +179,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
 
       <div className="flex flex-wrap gap-2">
         <button onClick={() => setAccepted(true)} className="px-3 py-1 rounded-lg text-sm font-medium" style={{ background: ACCENT }}>Принять</button>
-        {mode !== 'tune' && (<button onClick={()=>setMode('tune')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Настроить</button>)}
+  {mode !== 'tune' && (<button onClick={()=>{ setPrompt(initialPrompt); setMode('tune'); }} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Настроить</button>)}
         {mode === 'tune' && (<button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Просмотр</button>)}
   <button onClick={()=>onRedo(frame.id, { force_segmentation_mask: true })} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Голова</button>
         <button onClick={()=>window.dispatchEvent(new CustomEvent('delete-frame', { detail: { frameId: frame.id } }))} className="px-3 py-1 rounded-lg text-sm font-medium border border-red-400 text-red-600" style={{ background: SURFACE }}>Удалить</button>
