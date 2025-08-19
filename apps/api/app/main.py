@@ -38,26 +38,23 @@ app.include_router(webhooks_router, prefix="/api")
 # служебные ручки для воркера (мы уже указываем полный префикс внутри файла)
 app.include_router(internal_router)
 
-# Seed predefined heads if not already created
+# Seed predefined heads (cleaned & updated)
 DEFAULT_HEAD_PARAMS = {
     "prompt_strength": 0.8,
-    # Унифицировано требование: во всех головах num_inference_steps = 35
-    "num_inference_steps": 35,
+    "num_inference_steps": 40,
     "guidance_scale": 2,
     "num_outputs": 3,
     "output_format": "png",
 }
 
 PREDEFINED_HEADS = [
-    {"name": "Anna",  "trigger": "smanna",  "model_version": "labprototypes/smanna:73184591dd196bc5656fc1901c8872093a5f48fe8ffa20ff9677213519d911a8", "params": DEFAULT_HEAD_PARAMS},
-    {"name": "Kate",  "trigger": "smkate",  "model_version": "labprototypes/smkate:5a2ee00ca522c7eee9645ce4a518eb95e04979d35c8099e2efefcdf487ea2ee9", "params": DEFAULT_HEAD_PARAMS},
-    {"name": "James", "trigger": "smjames", "model_version": "labprototypes/smjames:c8dd353a4ddfa54dfe1788f80f6c1c39dc3db2f7bc23f680eda23a4a389c26db", "params": DEFAULT_HEAD_PARAMS},
-    {"name": "Rob",   "trigger": "smrob",   "model_version": "labprototypes/smrob:d51c0d9bba5a719941e05ca816d9630445b3ae34dc723267b9081fbb98dc4776", "params": DEFAULT_HEAD_PARAMS},
-    {"name": "Jack",  "trigger": "smjack",  "model_version": "labprototypes/smjack:7435b4e8f68c48bedda1dcd24d1a90647812b548f1e8e86597fbc820bfe23858", "params": DEFAULT_HEAD_PARAMS},
-    {"name": "Julie", "trigger": "smjulie", "model_version": "labprototypes/smjulie:f75df25f746e74b4bdc49132315aacb605922d8a5894b7057d81f53f3c256f1e", "params": DEFAULT_HEAD_PARAMS},
-    # Новые головы
-    {"name": "Kate2", "trigger": "smkate2", "model_version": "labprototypes/smkate2:edfb83c9442d75bdcd8846bd88d0a03ed31cdcaad3a0fda79b6a4cb57b8d8fca", "params": DEFAULT_HEAD_PARAMS},
-    {"name": "Kate3", "trigger": "smkate3", "model_version": "labprototypes/smkate3:141bcd66c126afcc9eb7f9bde0e01985e7c15abab1236687e81ecfbe3de77f3f", "params": DEFAULT_HEAD_PARAMS},
+    # New order with new heads first
+    {"name": "James2", "trigger": "smjames2", "model_version": "labprototypes/smjames2:594c1c3d946f67c75a09c27a70312d7ef0085f58967187a787ab08a52d4c4f2e", "params": DEFAULT_HEAD_PARAMS, "prompt_template": "a photo of {token} male model"},
+    {"name": "Rob2",   "trigger": "smrob2",   "model_version": "labprototypes/smrob2:ce78c962565bfaad1f8471d3013b5961cb5319df5d9ac61d737a3cd4e685d884", "params": DEFAULT_HEAD_PARAMS, "prompt_template": "a photo of {token} male model"},
+    {"name": "Ann2",   "trigger": "smann2",   "model_version": "labprototypes/smann2:cdae6b924f139956bb941aaee8afcd3d505f1c02c013de7b696650d7736c4a60", "params": DEFAULT_HEAD_PARAMS, "prompt_template": "a photo of {token} female model"},
+    {"name": "Kate2",  "trigger": "smkate2",  "model_version": "labprototypes/smkate2:edfb83c9442d75bdcd8846bd88d0a03ed31cdcaad3a0fda79b6a4cb57b8d8fca", "params": DEFAULT_HEAD_PARAMS, "prompt_template": "a photo of {token} female model"},
+    {"name": "Jack",   "trigger": "smjack",   "model_version": "labprototypes/smjack:7435b4e8f68c48bedda1dcd24d1a90647812b548f1e8e86597fbc820bfe23858", "params": DEFAULT_HEAD_PARAMS, "prompt_template": "a photo of {token} boy model"},
+    {"name": "Julie",  "trigger": "smjulie",  "model_version": "labprototypes/smjulie:f75df25f746e74b4bdc49132315aacb605922d8a5894b7057d81f53f3c256f1e", "params": DEFAULT_HEAD_PARAMS, "prompt_template": "a photo of {token} girl model"},
 ]
 
 def _seed_heads():
@@ -72,6 +69,7 @@ def _seed_heads():
                 "trigger": trig,
                 "model_version": h["model_version"],
                 "params": dict(h.get("params") or {}),
+                "prompt_template": h.get("prompt_template"),
             })
         else:
             # update existing params with any newly introduced defaults; force num_inference_steps update
@@ -119,7 +117,7 @@ def _seed_heads_db():
                     name=h["name"],
                     replicate_model=h["model_version"],
                     trigger_token=trig,
-                    prompt_template="a photo of {token} female model",
+                    prompt_template=h.get("prompt_template") or "a photo of {token} female model",
                     params=h["params"],
                 ))
         sess.commit()

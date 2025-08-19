@@ -47,7 +47,8 @@ def create_head(payload: Dict[str, Any]):
         "name": payload["name"],
         "trigger": payload.get("trigger", ""),
         "model_version": payload["model_version"],
-        "params": payload.get("params", {}),
+    "params": payload.get("params", {}),
+    "prompt_template": payload.get("prompt_template"),
     }
     return HEADS[head_id]
 
@@ -175,6 +176,7 @@ def get_frame(frame_id: int) -> Optional[Dict[str, Any]]:
                         "trigger_token": hp.trigger_token,
                         "model_version": hp.replicate_model,
                         "params": hp.params or {},
+                        "prompt_template": hp.prompt_template,
                     }
             versions = sess.execute(select(models.FrameOutputVersion).where(models.FrameOutputVersion.frame_id == fr.id).order_by(models.FrameOutputVersion.version_index)).scalars().all()
             outs_versions = [list(v.keys) for v in versions]
