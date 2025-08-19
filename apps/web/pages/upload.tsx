@@ -161,6 +161,8 @@ export default function UploadBySkuPage() {
           resp.queued ? "да" : "нет"
         }`
       );
+  // Очистка списка файлов после успешной отправки
+  setFiles([]);
     } catch (e: any) {
       console.error(e);
       setStage("error");

@@ -41,7 +41,8 @@ app.include_router(internal_router)
 # Seed predefined heads if not already created
 DEFAULT_HEAD_PARAMS = {
     "prompt_strength": 0.8,
-    "num_inference_steps": 50,  # updated from 28 -> 50
+    # Унифицировано требование: во всех головах num_inference_steps = 35
+    "num_inference_steps": 35,
     "guidance_scale": 2,
     "num_outputs": 3,
     "output_format": "png",
@@ -54,6 +55,9 @@ PREDEFINED_HEADS = [
     {"name": "Rob",   "trigger": "smrob",   "model_version": "labprototypes/smrob:d51c0d9bba5a719941e05ca816d9630445b3ae34dc723267b9081fbb98dc4776", "params": DEFAULT_HEAD_PARAMS},
     {"name": "Jack",  "trigger": "smjack",  "model_version": "labprototypes/smjack:7435b4e8f68c48bedda1dcd24d1a90647812b548f1e8e86597fbc820bfe23858", "params": DEFAULT_HEAD_PARAMS},
     {"name": "Julie", "trigger": "smjulie", "model_version": "labprototypes/smjulie:f75df25f746e74b4bdc49132315aacb605922d8a5894b7057d81f53f3c256f1e", "params": DEFAULT_HEAD_PARAMS},
+    # Новые головы
+    {"name": "Kate2", "trigger": "smkate2", "model_version": "labprototypes/smkate2:edfb83c9442d75bdcd8846bd88d0a03ed31cdcaad3a0fda79b6a4cb57b8d8fca", "params": DEFAULT_HEAD_PARAMS},
+    {"name": "Kate3", "trigger": "smkate3", "model_version": "labprototypes/smkate3:141bcd66c126afcc9eb7f9bde0e01985e7c15abab1236687e81ecfbe3de77f3f", "params": DEFAULT_HEAD_PARAMS},
 ]
 
 def _seed_heads():
