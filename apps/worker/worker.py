@@ -100,7 +100,9 @@ def put_mask_to_s3(key: str, data: bytes) -> str:
     return f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
 
 def s3_public_url(key: str) -> str:
-    # Универсальная публичная форма (как в бэке)
+    # Region-aware virtual hosted URL (improves DNS reliability in some sandboxes)
+    if S3_REGION and S3_REGION not in ("us-east-1", ""):
+        return f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{key}"
     return f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
 
 
@@ -140,6 +142,7 @@ def ensure_presigned_download(url: Optional[str] = None, key: Optional[str] = No
     if not k and url:
         k = s3_key_from_public_url(url)
     if k:
+        # boto will already choose region; URL host will include region automatically for non us-east-1
         return s3_client().generate_presigned_url(
             "get_object",
             Params={"Bucket": S3_BUCKET, "Key": k},

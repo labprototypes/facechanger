@@ -73,10 +73,12 @@ def _s3_client():
 
 
 def _s3_public_url(key: str) -> str:
-    """
-    Публичный URL (если бакет публичный). Универсальный (без REGION в хосте).
-    Совпадает со схемой, которую ты уже используешь в других местах проекта.
-    """
+    """Return region-aware public URL (virtual-hosted style).
+    For non us-east-1 buckets some execution environments (e.g. Replicate sandboxes)
+    may fail DNS resolving bucket.s3.amazonaws.com; prefer bucket.s3.<region>.amazonaws.com
+    when region is known and != us-east-1."""
+    if S3_REGION and S3_REGION not in ("us-east-1", ""):
+        return f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{key}"
     return f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
 
 
