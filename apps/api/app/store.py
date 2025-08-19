@@ -120,7 +120,18 @@ def register_frame(
     if USE_DB:
         sess = get_session()
         try:
+            # Optionally resolve/persist head profile id (by trigger token) if head payload present
+            head_profile_id = None
+            if head and (trig := head.get("trigger_token") or head.get("trigger")):
+                from sqlalchemy import select
+                hp = sess.execute(select(models.HeadProfile).where(models.HeadProfile.trigger_token == trig)).scalar_one_or_none()
+                if hp:
+                    head_profile_id = hp.id
             fr = models.Frame(sku_id=int(sku_id), original_key=original_key or "", status=models.FrameStatus.NEW)
+            if head_profile_id is not None:
+                # attach via sku.head_profile_id? No, Frame only links to SKU; we keep head_profile per frame via SKU relation
+                # For now we do nothing extra; could denormalize later.
+                pass
             sess.add(fr); sess.commit(); sess.refresh(fr)
             return fr.id
         finally:
@@ -154,6 +165,17 @@ def get_frame(frame_id: int) -> Optional[Dict[str, Any]]:
             if not fr:
                 return None
             sku = sess.get(models.SKU, fr.sku_id)
+            head_payload = None
+            if sku and sku.head_profile_id:
+                hp = sess.get(models.HeadProfile, sku.head_profile_id)
+                if hp:
+                    head_payload = {
+                        "id": hp.id,
+                        "name": hp.name,
+                        "trigger_token": hp.trigger_token,
+                        "model_version": hp.replicate_model,
+                        "params": hp.params or {},
+                    }
             versions = sess.execute(select(models.FrameOutputVersion).where(models.FrameOutputVersion.frame_id == fr.id).order_by(models.FrameOutputVersion.version_index)).scalars().all()
             outs_versions = [list(v.keys) for v in versions]
             flat: List[str] = []
@@ -171,6 +193,7 @@ def get_frame(frame_id: int) -> Optional[Dict[str, Any]]:
                 "outputs_versions": outs_versions or None,
                 "favorites": favorites,
                 "pending_params": fr.pending_params,
+                "head": head_payload,
             }
         finally:
             sess.close()

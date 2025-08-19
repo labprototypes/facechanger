@@ -48,13 +48,16 @@ def list_batches(limit: int = 14):
         try:
             # aggregate frames per sku with status counts
             Frame = models.Frame; SKU = models.SKU
+            from sqlalchemy import case
+            done_case = case((Frame.status == models.FrameStatus.DONE, 1), else_=0)
+            failed_case = case((Frame.status == models.FrameStatus.FAILED, 1), else_=0)
             rows = sess.execute(
                 select(
                     SKU.id, SKU.code, SKU.brand,
                     func.date_trunc('day', SKU.created_at).label('d'),
                     func.count(Frame.id).label('frames'),
-                    func.sum(func.case((Frame.status == models.FrameStatus.DONE, 1), else_=0)).label('done'),
-                    func.sum(func.case((Frame.status == models.FrameStatus.FAILED, 1), else_=0)).label('failed')
+                    func.sum(done_case).label('done'),
+                    func.sum(failed_case).label('failed')
                 ).join(Frame, Frame.sku_id == SKU.id, isouter=True)
                 .group_by(SKU.id, SKU.code, SKU.brand, 'd')
                 .order_by(func.max(SKU.created_at).desc())
@@ -101,12 +104,15 @@ def list_skus(date: str, brand: str | None = None):
         sess = get_session()
         try:
             Frame = models.Frame; SKU = models.SKU
+            from sqlalchemy import case
+            done_case = case((Frame.status == models.FrameStatus.DONE, 1), else_=0)
+            failed_case = case((Frame.status == models.FrameStatus.FAILED, 1), else_=0)
             q = (
                 select(
                     SKU.id, SKU.code, SKU.brand,
                     func.count(Frame.id),
-                    func.sum(func.case((Frame.status == models.FrameStatus.DONE, 1), else_=0)),
-                    func.sum(func.case((Frame.status == models.FrameStatus.FAILED, 1), else_=0))
+                    func.sum(done_case),
+                    func.sum(failed_case)
                 ).join(Frame, Frame.sku_id == SKU.id, isouter=True)
                 .where(func.date_trunc('day', SKU.created_at) == date)
                 .group_by(SKU.id, SKU.code, SKU.brand)
