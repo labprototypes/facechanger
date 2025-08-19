@@ -280,8 +280,10 @@ def replicate_segment_head(image_url: str, width: int, height: int) -> Optional[
     Возвращает np.ndarray (H,W) uint8 (0/255) или None при неудаче.
     """
     if not HEAD_SEGMENT_MODEL_VERSION:
+        print("[worker] head-seg skip: HEAD_SEGMENT_MODEL_VERSION not set")
         return None
     try:
+        print(f"[worker] head-seg start version={HEAD_SEGMENT_MODEL_VERSION} url={image_url[:80]}")
         headers = {
             "Authorization": f"Token {REPLICATE_API_TOKEN}",
             "Content-Type": "application/json",
@@ -300,7 +302,11 @@ def replicate_segment_head(image_url: str, width: int, height: int) -> Optional[
         data = r.json()
         get_url = (data.get("urls") or {}).get("get")
         if not get_url:
+            print("[worker] head-seg error: missing get url in response")
             return None
+        pred_id = data.get("id")
+        if pred_id:
+            print(f"[worker] head-seg prediction id={pred_id}")
         # poll (reuse replicate_poll but без вебхуков)
         seg_final = replicate_poll(get_url, max_wait_sec=180, step_sec=2.0)
         if seg_final.get("status") != "succeeded":
@@ -308,6 +314,7 @@ def replicate_segment_head(image_url: str, width: int, height: int) -> Optional[
             return None
         out_url = seg_final.get("output")
         if not out_url:
+            print("[worker] head-seg error: no output url")
             return None
         if isinstance(out_url, list):  # на случай если список
             out_url = out_url[0] if out_url else None
@@ -551,6 +558,7 @@ def process_frame(frame_id: int):
         print(f"[worker] frame {frame_id}: using head segmentation mask")
     else:
         mask = make_face_mask(img, expand_ratio=MASK_EXPAND_RATIO)
+        print(f"[worker] frame {frame_id}: fallback local mask (YOLO/Haar)")
     mask_png = _to_png_bytes(mask)
     put_mask_to_s3(mask_key, mask_png)
     
