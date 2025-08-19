@@ -86,6 +86,36 @@ try:
 except Exception as e:
     print(f"[startup] DB init failed: {e}")
 
+# ---------------------------------------------------------------------------
+# Fallback schema patching: ensure new columns exist if migrations not applied
+# ---------------------------------------------------------------------------
+def _ensure_schema_patches():
+    """Best-effort creation of columns that recent code expects.
+    This prevents runtime 500s if Alembic migration wasn't run yet."""
+    from sqlalchemy import text
+    try:
+        sess = get_session()
+    except Exception as e:
+        print(f"[startup] cannot get session for schema patch: {e}")
+        return
+    try:
+        try:
+            sess.execute(text("ALTER TABLE skus ADD COLUMN IF NOT EXISTS is_done BOOLEAN DEFAULT FALSE"))
+            sess.commit()
+            # drop default to mirror migration (optional)
+            try:
+                sess.execute(text("ALTER TABLE skus ALTER COLUMN is_done DROP DEFAULT"))
+                sess.commit()
+            except Exception:
+                sess.rollback()
+        except Exception as e:
+            sess.rollback()
+            print(f"[startup] schema patch (is_done) skipped: {e}")
+    finally:
+        sess.close()
+
+_ensure_schema_patches()
+
 def _seed_heads_db():
     from sqlalchemy import select
     from sqlalchemy.exc import ProgrammingError, OperationalError
