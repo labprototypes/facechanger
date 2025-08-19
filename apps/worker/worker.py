@@ -16,7 +16,10 @@ except Exception as e:  # ultralytics may not be installed yet
     _YOLO_MODEL_LOAD_ERROR = str(e)
 import boto3
 import re
-from .head_mask import generate_head_mask_auto
+try:
+    from .head_mask import generate_head_mask_auto  # package import
+except Exception:
+    from head_mask import generate_head_mask_auto  # fallback when not recognized as pkg
 
 # ======== ENV ========
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
