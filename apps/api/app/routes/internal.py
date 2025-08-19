@@ -169,18 +169,15 @@ def _frame_to_public_json(fr: Dict[str, Any]) -> Dict[str, Any]:
         for item in fr["outputs"]:
             if isinstance(item, dict):
                 key = item.get("key") or item.get("url")
-                if key and not item.get("url"):
-                    # восстановим url из key
+                if key and '://' not in key:
                     out["outputs"].append({"key": key, "url": _best_url_for_key(key)})
                 else:
-                    # если уже есть url, но нужна пересборка (например, был public, нужен presign)
-                    if key and S3_REQUIRE_SIGNED:
-                        out["outputs"].append({"key": key, "url": _best_url_for_key(key)})
-                    else:
-                        out["outputs"].append(item)
+                    out["outputs"].append({"key": key, "url": item.get("url") or key})
             elif isinstance(item, str):
-                # просто ключ
-                out["outputs"].append({"key": item, "url": _best_url_for_key(item)})
+                if '://' in item:
+                    out["outputs"].append({"key": item, "url": item})
+                else:
+                    out["outputs"].append({"key": item, "url": _best_url_for_key(item)})
             else:
                 continue
 
@@ -340,14 +337,24 @@ def internal_generation_complete(generation_id: int, body: _GenerationCompleteBo
     """Worker сообщает о завершении генерации и её выходах.
     Передаём список outputs (ключи или URL)."""
     outs = body.outputs or []
-    # Нормализуем: если пришёл URL вида https://bucket.s3.amazonaws.com/key -> превращаем в key
+    # Нормализуем public S3 URL (включая региональные) -> key
+    import urllib.parse
+    host_variants = {f"{S3_BUCKET}.s3.amazonaws.com"}
+    if S3_REGION and S3_REGION not in ("us-east-1", ""):
+        host_variants.add(f"{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com")
     norm: list[str] = []
-    prefix = f"https://{S3_BUCKET}.s3.amazonaws.com/"
     for o in outs:
-        if o.startswith(prefix):
-            norm.append(o[len(prefix):])
-        else:
-            norm.append(o)
+        if isinstance(o, str) and o.startswith("http"):
+            try:
+                u = urllib.parse.urlparse(o)
+                if u.netloc in host_variants:
+                    key = u.path.lstrip('/')
+                    if key:
+                        norm.append(key)
+                        continue
+            except Exception:
+                pass
+        norm.append(o)
     try:
         set_generation_outputs(int(generation_id), norm)
         # Продублируем на сам frame (удобно для простого UI /internal/sku/.../view)
