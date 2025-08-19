@@ -75,7 +75,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
   const maskUrl = frame.mask_url;
 
   return (
-    <div className="rounded-2xl p-3 shadow-sm border flex flex-col" style={{ background: SURFACE, borderColor: "#0000001a" }}>
+  <div className="rounded-2xl p-3 shadow-sm border flex flex-col" style={{ background: accepted? ACCENT : SURFACE, borderColor: "#0000001a" }}>
       <div className="flex items-center justify-between mb-3">
   <div className="text-sm opacity-70">Кадр #{frame.seq || frame.id}</div>
         <div className="flex items-center gap-2">
@@ -179,7 +179,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
       )}
 
   <div className="flex flex-wrap gap-2 mt-1">
-        <button onClick={() => setAccepted(true)} className="px-3 py-1 rounded-lg text-sm font-medium" style={{ background: ACCENT }}>Принять</button>
+  <button onClick={() => setAccepted(v=>!v)} className="px-3 py-1 rounded-lg text-sm font-medium border" style={{ background: accepted? SURFACE : '#ffffff', opacity: accepted? 0.9 : 0.6 }}>{accepted? 'Принято' : 'Принять'}</button>
   {mode !== 'tune' && (<button onClick={()=>{ setPrompt(initialPrompt); setMode('tune'); }} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Настроить</button>)}
         {mode === 'tune' && (<button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Просмотр</button>)}
   <button onClick={()=>onRedo(frame.id, { force_segmentation_mask: true })} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Голова</button>
@@ -304,8 +304,17 @@ export default function SkuPage() {
       .catch(e=> console.error(e));
   };
 
+  const skuDone = data?.sku?.is_done;
+  const toggleSkuDone = async () => {
+    if(!sku) return;
+    try {
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/sku/by-code/${sku}/done`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ done: !skuDone }) });
+      load();
+    } catch(e){ console.error(e); }
+  };
+
   return (
-    <div className="min-h-screen" style={{ background: BG, color: TEXT }}>
+    <div className="min-h-screen" style={{ background: skuDone? ACCENT : BG, color: TEXT }}>
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>
@@ -314,9 +323,10 @@ export default function SkuPage() {
           </div>
           <div className="flex items-center gap-4 text-sm">
             <button onClick={load} className="px-3 py-1 rounded-lg border" style={{ background: SURFACE }}>Обновить</button>
+            <button onClick={toggleSkuDone} className="px-3 py-1 rounded-lg border text-xs font-medium" style={{ background: skuDone? SURFACE : ACCENT }}>{skuDone? 'Снять Готово' : 'Готово'}</button>
             <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)} /> авто</label>
             <div className="w-40 h-2 bg-black/10 rounded-full overflow-hidden">
-              <div className="h-full bg-lime-400 transition-all" style={{ width: `${progressPct}%` }} />
+              <div className="h-full transition-all" style={{ width: `${progressPct}%`, background: skuDone? '#ffffff' : 'limegreen' }} />
             </div>
             <span className="text-xs opacity-70 w-10 text-right">{progressPct}%</span>
             <button onClick={deleteSku} className="px-3 py-1 rounded-lg border text-xs text-red-600 border-red-400" style={{ background: SURFACE }}>Удалить SKU</button>

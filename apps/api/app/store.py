@@ -101,7 +101,7 @@ def get_sku(sku_id: int) -> Optional[Dict[str, Any]]:
             sku = sess.get(models.SKU, int(sku_id))
             if not sku:
                 return None
-            return {"id": sku.id, "code": sku.code, "brand": sku.brand, "created_at": sku.created_at.timestamp() if getattr(sku.created_at,'timestamp',None) else None}
+            return {"id": sku.id, "code": sku.code, "brand": sku.brand, "created_at": sku.created_at.timestamp() if getattr(sku.created_at,'timestamp',None) else None, "is_done": getattr(sku, 'is_done', False)}
         finally:
             sess.close()
     return SKUS_BY_ID.get(int(sku_id))
@@ -576,7 +576,7 @@ __all__ = [
     "save_generation_prediction", "set_generation_outputs",
     "get_generation", "generations_for_frame",
     "set_frame_favorites", "get_frame_favorites",
-    "delete_frame", "delete_sku",
+    "delete_frame", "delete_sku", "set_sku_done",
 ]
 
 def get_sku_by_code(code: str) -> Optional[Dict[str, Any]]:
@@ -588,7 +588,7 @@ def get_sku_by_code(code: str) -> Optional[Dict[str, Any]]:
             sku = sess.execute(select(models.SKU).where(models.SKU.code == code)).scalar_one_or_none()
             if not sku:
                 return None
-            return {"id": sku.id, "code": sku.code, "brand": sku.brand, "created_at": sku.created_at.timestamp() if getattr(sku.created_at,'timestamp',None) else None}
+            return {"id": sku.id, "code": sku.code, "brand": sku.brand, "created_at": sku.created_at.timestamp() if getattr(sku.created_at,'timestamp',None) else None, "is_done": getattr(sku, 'is_done', False)}
         finally:
             sess.close()
     sid = SKU_BY_CODE.get(code)
@@ -632,3 +632,29 @@ def list_sku_codes_by_date(date: str) -> List[str]:
         if datetime.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d') == date:
             out.append(code)
     return out
+
+def set_sku_done(code_or_id, done: bool = True) -> None:
+    """Mark SKU as manually done (persistent flag)."""
+    if USE_DB:
+        from sqlalchemy import select
+        sess = get_session()
+        try:
+            sku_obj = None
+            if isinstance(code_or_id, int):
+                sku_obj = sess.get(models.SKU, int(code_or_id))
+            else:
+                sku_obj = sess.execute(select(models.SKU).where(models.SKU.code == str(code_or_id))).scalar_one_or_none()
+            if not sku_obj:
+                return
+            sku_obj.is_done = bool(done)
+            sess.add(sku_obj); sess.commit(); return
+        finally:
+            sess.close()
+    # in-memory
+    sid = None
+    if isinstance(code_or_id, int):
+        sid = code_or_id
+    else:
+        sid = SKU_BY_CODE.get(str(code_or_id))
+    if sid and sid in SKUS_BY_ID:
+        SKUS_BY_ID[sid]['is_done'] = bool(done)

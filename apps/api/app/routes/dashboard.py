@@ -141,6 +141,7 @@ def list_skus(date: str, brand: str | None = None):
                     "status": status,
                     "updatedAt": datetime.utcnow().isoformat(),
                     "headProfile": None,
+                    "is_done": getattr(r, 'is_done', False),
                 })
             return {"items": items}
         finally:
@@ -158,7 +159,7 @@ def list_skus(date: str, brand: str | None = None):
         elif failed and failed == total: status = "FAILED"
         out.append({
             "id": sku["id"], "sku": sku.get("code"), "brand": sku.get("brand"), "frames": total, "done": done,
-            "status": status, "updatedAt": datetime.utcnow().isoformat(), "headProfile": sku.get("head_id")
+            "status": status, "updatedAt": datetime.utcnow().isoformat(), "headProfile": sku.get("head_id"), "is_done": sku.get("is_done", False)
         })
     return {"items": out}
 

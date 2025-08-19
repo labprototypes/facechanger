@@ -35,7 +35,7 @@ from ..store import (
     set_generation_outputs, set_frame_outputs, append_frame_outputs_version,
     set_frame_favorites, get_frame_favorites, get_sku_by_code, set_frame_mask,
     get_all_sku_codes, list_sku_codes_by_date, set_frame_pending_params,
-    SKU_BY_CODE, delete_frame, delete_sku
+    SKU_BY_CODE, delete_frame, delete_sku, set_sku_done
 )
 USE_DB = bool(os.environ.get("DATABASE_URL"))
 
@@ -221,7 +221,9 @@ def internal_sku_view_by_code(code: str):
         if fr.get("pending_params"):
             obj["pending_params"] = fr.get("pending_params")
         items.append(obj)
-    return {"sku": {"id": sid, "code": code}, "frames": items}
+    sku_payload = get_sku_by_code(code)
+    is_done = bool(sku_payload.get("is_done")) if sku_payload else False
+    return {"sku": {"id": sid, "code": code, "is_done": is_done}, "frames": items}
 
 @router.get("/internal/s3/presign-get")
 def presign_get_url(key: str):
@@ -229,6 +231,13 @@ def presign_get_url(key: str):
     Возвращает presigned GET url для S3 key.
     """
     return {"url": _s3_signed_get(key)}
+
+@router.post("/sku/by-code/{code}/done")
+def internal_mark_sku_done(code: str, body: _SkuDoneBody):
+    if code not in SKU_BY_CODE and not get_sku_by_code(code):
+        raise HTTPException(status_code=404, detail="sku not found")
+    set_sku_done(code, body.done)
+    return {"ok": True, "code": code, "done": body.done}
 
 @router.get("/sku/{sku_id}/frames")
 def internal_sku_frames(sku_id: str):
@@ -318,6 +327,9 @@ class _MaskBody(BaseModel):
     key: str
     strategy: str | None = None
     box: list[int] | None = None
+
+class _SkuDoneBody(BaseModel):
+    done: bool = True
 
 
 @router.post("/generation/{generation_id}/prediction")
