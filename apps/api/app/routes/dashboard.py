@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, List
 from ..store import (
     list_frames_for_sku, get_frame, get_sku, get_sku_by_code,
@@ -100,26 +100,30 @@ def list_batches(limit: int = 14):
 def list_skus(date: str, brand: str | None = None):
     # return per-sku progress for given date
     if USE_DB:
-        from sqlalchemy import select, func
+        from sqlalchemy import select, func, and_, case
         sess = get_session()
         try:
             Frame = models.Frame; SKU = models.SKU
-            from sqlalchemy import case
-            done_case = case((Frame.status == models.FrameStatus.DONE, 1), else_=0)
-            failed_case = case((Frame.status == models.FrameStatus.FAILED, 1), else_=0)
+            try:
+                day_start = datetime.strptime(date, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(422, "invalid date format, expected YYYY-MM-DD")
+            day_end = day_start + timedelta(days=1)
+            done_case = func.sum(case((Frame.status == models.FrameStatus.DONE, 1), else_=0))
+            failed_case = func.sum(case((Frame.status == models.FrameStatus.FAILED, 1), else_=0))
             q = (
                 select(
                     SKU.id, SKU.code, SKU.brand,
                     func.count(Frame.id),
-                    func.sum(done_case),
-                    func.sum(failed_case)
-                ).join(Frame, Frame.sku_id == SKU.id, isouter=True)
-                .where(func.date_trunc('day', SKU.created_at) == date)
+                    done_case,
+                    failed_case,
+                )
+                .join(Frame, Frame.sku_id == SKU.id, isouter=True)
+                .where(and_(SKU.created_at >= day_start, SKU.created_at < day_end))
                 .group_by(SKU.id, SKU.code, SKU.brand)
                 .order_by(SKU.id.desc())
             )
             if brand:
-                from sqlalchemy import and_
                 q = q.where(SKU.brand == brand)
             rows = sess.execute(q).fetchall()
             items: List[Dict[str, Any]] = []
