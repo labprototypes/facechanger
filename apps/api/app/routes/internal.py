@@ -540,7 +540,11 @@ def internal_download_favorites_zip(code: str):
     fav_items: list[tuple[str,str]] = []  # (key, arcname)
     for fr in frames:
         favs = fr.get("favorites") or []
-        for k in favs:
+        for fav in favs:
+            # favorites may be list[str] or list[dict{"key":...,"url":...}]
+            k = fav.get("key") if isinstance(fav, dict) else fav
+            if not isinstance(k, str):
+                continue
             arcname = f"{code}/frame_{fr['id']}/{k.split('/')[-1]}"
             fav_items.append((k, arcname))
     if not fav_items:

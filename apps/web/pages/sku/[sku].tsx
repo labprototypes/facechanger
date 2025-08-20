@@ -80,7 +80,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
   <div className="text-sm opacity-70">Кадр #{frame.seq || frame.id}</div>
         <div className="flex items-center gap-2">
           {maskUrl && (
-            <button onClick={() => setShowMask(v=>!v)} className="px-2 py-1 rounded-lg text-xs border" style={{ background: SURFACE }}>{showMask?"Скрыть маску":"Маска"}</button>
+            <button onClick={() => setShowMask(v=>!v)} className="px-2 py-1 rounded-lg text-xs border" style={{ background: showMask? ACCENT : SURFACE }}>{showMask?"Скрыть маску":"Маска"}</button>
           )}
           {accepted && (<span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Pinned</span>)}
         </div>
@@ -180,7 +180,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
 
   <div className="flex flex-wrap gap-2 mt-1">
   <button onClick={() => setAccepted(v=>!v)} className="px-3 py-1 rounded-lg text-sm font-medium border" style={{ background: accepted? SURFACE : '#ffffff', opacity: accepted? 0.9 : 0.6 }}>{accepted? 'Принято' : 'Принять'}</button>
-  {mode !== 'tune' && (<button onClick={()=>{ setPrompt(initialPrompt); setMode('tune'); }} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Настроить</button>)}
+  {mode !== 'tune' && (<button onClick={()=>{ setPrompt(initialPrompt); if(frame.mask_url) setShowMask(true); setMode('tune'); }} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Настроить</button>)}
         {mode === 'tune' && (<button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Просмотр</button>)}
   <button onClick={()=>onRedo(frame.id, { force_segmentation_mask: true })} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Голова</button>
         <button onClick={()=>window.dispatchEvent(new CustomEvent('delete-frame', { detail: { frameId: frame.id } }))} className="px-3 py-1 rounded-lg text-sm font-medium border border-red-400 text-red-600" style={{ background: SURFACE }}>Удалить</button>

@@ -10,7 +10,7 @@ import useSWR from "swr";
 const BG = "#f5f5f5"; const TEXT = "#000000"; const SURFACE = "#ffffff"; const ACCENT = "#B8FF01";
 
 interface BatchSummary { date: string; total: number; inProgress: number; done: number; failed: number; }
-interface SkuRow { id: number; sku: string; brand?: string | null; headProfile?: string | null | number; frames: number; done: number; status: "IN_PROGRESS" | "DONE" | "FAILED"; updatedAt: string; }
+interface SkuRow { id: number; sku: string; brand?: string | null; headProfile?: string | null | number; frames: number; done: number; status: "IN_PROGRESS" | "DONE" | "FAILED"; updatedAt: string; is_done?: boolean; }
 
 const fetcher = (u: string) => fetch(u).then(r => { if(!r.ok) throw new Error(r.statusText); return r.json(); });
 
@@ -130,8 +130,9 @@ export default function DashboardBatches() {
                 : r.status === 'FAILED'
                   ? <span className="px-2 py-1 rounded-full border"><AlertCircle className="inline -mt-1" size={14}/> Ошибка</span>
                   : <span className="px-2 py-1 rounded-full border"><Clock className="inline -mt-1" size={14}/> В работе</span>;
+              const rowBg = r.is_done ? ACCENT : SURFACE;
               return (
-                <div key={r.id} className="grid grid-cols-12 px-4 py-3 border-t border-black/10 items-center">
+                <div key={r.id} className="grid grid-cols-12 px-4 py-3 border-t border-black/10 items-center" style={{ background: rowBg, transition: 'background 0.3s' }}>
                   <div className="col-span-3">
                     <button
                       onClick={() => goToSku(r.sku)}

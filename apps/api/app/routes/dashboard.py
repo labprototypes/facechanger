@@ -111,16 +111,17 @@ def list_skus(date: str, brand: str | None = None):
             day_end = day_start + timedelta(days=1)
             done_case = func.sum(case((Frame.status == models.FrameStatus.DONE, 1), else_=0))
             failed_case = func.sum(case((Frame.status == models.FrameStatus.FAILED, 1), else_=0))
+            # include manual is_done flag so dashboard can visually highlight completed SKU
             q = (
                 select(
-                    SKU.id, SKU.code, SKU.brand,
+                    SKU.id, SKU.code, SKU.brand, SKU.is_done,
                     func.count(Frame.id),
                     done_case,
                     failed_case,
                 )
                 .join(Frame, Frame.sku_id == SKU.id, isouter=True)
                 .where(and_(SKU.created_at >= day_start, SKU.created_at < day_end))
-                .group_by(SKU.id, SKU.code, SKU.brand)
+                .group_by(SKU.id, SKU.code, SKU.brand, SKU.is_done)
                 .order_by(SKU.id.desc())
             )
             if brand:
@@ -128,7 +129,8 @@ def list_skus(date: str, brand: str | None = None):
             rows = sess.execute(q).fetchall()
             items: List[Dict[str, Any]] = []
             for r in rows:
-                total = r[3] or 0; done = r[4] or 0; failed = r[5] or 0
+                # row layout: id, code, brand, is_done, total(count), done(sum), failed(sum)
+                total = r[4] or 0; done = r[5] or 0; failed = r[6] or 0
                 status = "IN_PROGRESS"
                 if total and done == total: status = "DONE"
                 elif failed and failed == total: status = "FAILED"
@@ -141,7 +143,7 @@ def list_skus(date: str, brand: str | None = None):
                     "status": status,
                     "updatedAt": datetime.utcnow().isoformat(),
                     "headProfile": None,
-                    "is_done": getattr(r, 'is_done', False),
+                    "is_done": bool(getattr(r, 'is_done', False)),
                 })
             return {"items": items}
         finally:
@@ -159,7 +161,7 @@ def list_skus(date: str, brand: str | None = None):
         elif failed and failed == total: status = "FAILED"
         out.append({
             "id": sku["id"], "sku": sku.get("code"), "brand": sku.get("brand"), "frames": total, "done": done,
-            "status": status, "updatedAt": datetime.utcnow().isoformat(), "headProfile": sku.get("head_id"), "is_done": sku.get("is_done", False)
+            "status": status, "updatedAt": datetime.utcnow().isoformat(), "headProfile": sku.get("head_id"), "is_done": bool(sku.get("is_done", False))
         })
     return {"items": out}
 
