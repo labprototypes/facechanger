@@ -332,6 +332,27 @@ def set_frame_pending_params(frame_id: int, params: Dict[str, Any]) -> None:
             fr.setdefault("pending_params", {}).update(params)
             fr["updated_at"] = _now()
 
+def replace_frame_pending_params(frame_id: int, params: Dict[str, Any]) -> None:
+    """Полностью заменить pending_params (используется при явном тюнинге кадра).
+    Сохраняем только переданный словарь (без мерджа), чтобы гарантировать что
+    воркер возьмёт ровно эти значения поверх head defaults.
+    """
+    if USE_DB:
+        sess = get_session()
+        try:
+            fr = sess.get(models.Frame, int(frame_id))
+            if not fr:
+                return
+            fr.pending_params = dict(params) if params is not None else None
+            sess.add(fr); sess.commit(); return
+        finally:
+            sess.close()
+    with _lock:
+        fr = FRAMES_BY_ID.get(int(frame_id))
+        if fr is not None:
+            fr["pending_params"] = dict(params) if params is not None else None
+            fr["updated_at"] = _now()
+
 def set_frame_favorites(frame_id: int, keys: List[str]) -> None:
     clean: List[str] = []
     seen = set()

@@ -437,18 +437,29 @@ def internal_redo_frame(frame_id: int, body: _RedoBody | None = None):
     # статус -> queued
     set_frame_status(int(frame_id), "queued")
     # сохраним параметры для воркера
-    from ..store import set_frame_pending_params
+    from ..store import set_frame_pending_params, replace_frame_pending_params
     params = {}
     if body is not None:
         params = {k: v for k, v in body.dict().items() if v is not None}
     if params:
-        set_frame_pending_params(int(frame_id), params)
+        # Замена целиком: подмешиваем только mask_strategy/mask_box если были раньше и не указаны явно.
         try:
-            # отладка: сразу перечитываем чтобы увидеть что сохранено
+            current = get_frame(int(frame_id)) or {}
+            existing_pp = current.get("pending_params") or {}
+            if "mask_strategy" in existing_pp and "mask_strategy" not in params:
+                params["mask_strategy"] = existing_pp["mask_strategy"]
+            if "mask_box" in existing_pp and "mask_box" not in params:
+                params["mask_box"] = existing_pp["mask_box"]
+        except Exception:
+            pass
+        replace_frame_pending_params(int(frame_id), params)
+        try:
             fr_after = get_frame(int(frame_id)) or {}
-            print(f"[api] /redo frame={frame_id} received params={params} stored_pending={fr_after.get('pending_params')}")
+            print(f"[api] /redo frame={frame_id} REPLACED pending_params -> {fr_after.get('pending_params')}")
         except Exception as e:
             print(f"[api] /redo frame={frame_id} debug fetch failed: {e}")
+        # Небольшая задержка чтобы транзакция точно видна воркеру (на всякий случай)
+        import time as _t; _t.sleep(0.1)
     # enqueue
     from ..celery_client import queue_process_frame
     try:
