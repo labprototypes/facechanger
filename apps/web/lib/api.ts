@@ -18,10 +18,14 @@ export async function requestUploadUrls(
   sku: string,
   files: File[]
 ): Promise<{ urls: { filename: string; url: string; key: string; public: string }[] }> {
-  return api(`/skus/${encodeURIComponent(sku)}/upload-urls`, {
-    method: "POST",
-    body: JSON.stringify({ files: files.map(f => ({ filename: f.name, size: f.size })) })
+  const res = await fetch(`${API_BASE}/skus/${encodeURIComponent(sku)}/upload-urls`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files: files.map(f => ({ name: f.name, type: f.type, size: f.size })) })
   });
+  if(!res.ok) throw new Error(`upload-urls failed: ${res.status}`);
+  const j = await res.json();
+  return { urls: (j.items||[]).map((it:any)=>({ filename: it.name, url: it.put_url, key: it.key, public: it.public_url })) };
 }
 
 export async function putToSignedUrl(signedUrl: string, file: File) {
@@ -71,9 +75,8 @@ export async function fetchSkuViewByCode(code: string) {
 }
 
 export async function requestMaskUploadUrl(frameId: number, filename: string, size?: number, type?: string) {
-  // reuse generic /skus upload since masks stored like uploads then assigned
-  // Simpler: we generate a presigned PUT directly under masks/ path via a small helper endpoint (not yet implemented) -> fallback: use direct upload via generic S3 client absent.
-  throw new Error("mask upload URL helper not implemented on server");
+  // For masks we reuse the SKU upload endpoint; need SKU code first -> caller passes through
+  throw new Error('Deprecated: not used');
 }
 
 export async function setFrameMask(frameId: number, key: string) {

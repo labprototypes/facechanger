@@ -2,7 +2,7 @@
 // @ts-nocheck
 import React, { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/router";
-import { fetchSkuViewByCode as fetchSkuView, setFrameMask } from "../../lib/api";
+import { fetchSkuViewByCode as fetchSkuView, setFrameMask, requestUploadUrls, putToSignedUrl } from "../../lib/api";
 
 const BG = "#f2f2f2"; const TEXT = "#000000"; const SURFACE = "#ffffff"; const ACCENT = "#B8FF01";
 
@@ -41,26 +41,17 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites, onS
   const uploadMask = async (file: File) => {
     setMaskError(null); setMaskUploading(true);
     try {
-      // Reuse generic uploads endpoint: POST /skus/{code}/upload-urls with single file, then PUT, then associate.
       const skuCode = frame.sku?.code;
       if(!skuCode) throw new Error('missing sku code');
-      const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/skus/${encodeURIComponent(skuCode)}/upload-urls`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: [{ name: file.name, size: file.size, type: file.type }] }) });
-      if(!r.ok) throw new Error('upload-urls failed');
-      const j = await r.json();
-      const item = j.items?.[0];
-      if(!item) throw new Error('no upload url');
-      const putUrl = item.put_url;
-      // PUT file
-      const putRes = await fetch(putUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'image/png' }, body: file });
-      if(!putRes.ok) throw new Error('PUT failed');
-      const key = item.key;
-      // Associate mask with frame
-      await setFrameMask(frame.id, key);
-      // locally reflect
-      frame.mask_key = key;
-      frame.mask_url = putUrl.split('?')[0].replace(/https:\/\/[^/]+\//, (m)=> m) // crude: backend will supply correct on reload
+      const { urls } = await requestUploadUrls(skuCode, [file]);
+      const u = urls[0];
+      if(!u) throw new Error('no upload url');
+      await putToSignedUrl(u.url, file);
+      await setFrameMask(frame.id, u.key);
+      frame.mask_key = u.key;
+      frame.mask_url = u.public; // signed vs public not critical; reload will normalize
     } catch(e:any) {
-      console.error(e); setMaskError(String(e));
+      console.error(e); setMaskError(e.message || String(e));
     } finally {
       setMaskUploading(false);
     }

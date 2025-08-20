@@ -33,9 +33,13 @@ def public_url(key: str) -> str:
     return f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
 
 class FileSpec(BaseModel):
-    name: str
+    # Frontend may send either 'name' or 'filename'; accept both.
+    name: Optional[str] = None
+    filename: Optional[str] = None
     type: Optional[str] = None
     size: Optional[int] = None
+    def real_name(self) -> str:
+        return (self.name or self.filename or "file").replace("/", "_")
 
 class UploadUrlsReq(BaseModel):
     files: List[FileSpec]
@@ -64,8 +68,11 @@ def _ensure_sku(code: str, brand: Optional[str] = None) -> int:
 def create_upload_urls(sku_code: str, body: UploadUrlsReq):
     cli = s3()
     out = []
+    if not body.files:
+        raise HTTPException(422, "files required")
     for f in body.files:
-        key = f"uploads/{sku_code}/{uuid.uuid4().hex}_{f.name}"
+        fname = f.real_name()
+        key = f"uploads/{sku_code}/{uuid.uuid4().hex}_{fname}"
         put_url = cli.generate_presigned_url(
             "put_object",
             Params={
@@ -75,7 +82,7 @@ def create_upload_urls(sku_code: str, body: UploadUrlsReq):
             },
             ExpiresIn=3600,
         )
-        out.append({"name": f.name, "key": key, "put_url": put_url, "public_url": public_url(key)})
+        out.append({"name": fname, "key": key, "put_url": put_url, "public_url": public_url(key)})
     return {"items": out}
 
 @router.post("/{sku_code}/submit")
