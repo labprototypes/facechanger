@@ -443,6 +443,12 @@ def internal_redo_frame(frame_id: int, body: _RedoBody | None = None):
         params = {k: v for k, v in body.dict().items() if v is not None}
     if params:
         set_frame_pending_params(int(frame_id), params)
+        try:
+            # отладка: сразу перечитываем чтобы увидеть что сохранено
+            fr_after = get_frame(int(frame_id)) or {}
+            print(f"[api] /redo frame={frame_id} received params={params} stored_pending={fr_after.get('pending_params')}")
+        except Exception as e:
+            print(f"[api] /redo frame={frame_id} debug fetch failed: {e}")
     # enqueue
     from ..celery_client import queue_process_frame
     try:

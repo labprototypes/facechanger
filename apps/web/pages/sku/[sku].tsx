@@ -65,6 +65,20 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites, onS
   const original = frame.original_url;
   const maskUrl = frame.mask_url;
 
+  // Когда приходят обновлённые pending_params (после редо) или пользователь заново открывает "Настроить",
+  // синхронизируем локальные состояния если мы не в процессе ручного редактирования (mode !== 'tune')
+  React.useEffect(()=>{
+    if (mode !== 'tune') {
+      const p = frame.pending_params || {};
+      setPrompt(p.prompt || frame.head?.prompt_template?.replace?.("{token}", frame.head?.trigger_token || frame.head?.trigger || "") || "");
+      setPromptStrength(p.prompt_strength ?? 0.8);
+      setSteps(p.num_inference_steps ?? 50);
+      setGuidanceScale(p.guidance_scale ?? 3);
+      setNumOutputs(p.num_outputs ?? 3);
+      setFormat(p.output_format || 'png');
+    }
+  }, [frame.pending_params, frame.id]);
+
   return (
   <div className="rounded-2xl p-3 shadow-sm border flex flex-col" style={{ background: accepted? ACCENT : SURFACE, borderColor: "#0000001a" }}>
       <div className="flex items-center justify-between mb-3">

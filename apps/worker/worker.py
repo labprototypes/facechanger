@@ -658,6 +658,10 @@ def process_frame(frame_id: int):
         "image": image_url_for_model,
         "mask": mask_url_for_model,
     }
+    try:
+        print(f"[worker] frame {frame_id}: pending_params={pending} head_params={head_params} final_input={input_dict}")
+    except Exception:
+        pass
 
     try:
         pred = replicate_create_prediction(model_version, input_dict, idempotency_key=f"gen-{generation_id}")
