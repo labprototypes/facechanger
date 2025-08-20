@@ -64,6 +64,7 @@ class Frame(Base):
     mask_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[FrameStatus] = mapped_column(Enum(FrameStatus), default=FrameStatus.NEW)
     pending_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    accepted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

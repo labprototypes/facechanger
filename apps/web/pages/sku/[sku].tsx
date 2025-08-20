@@ -21,9 +21,9 @@ function Modal({ open, onClose, children }: { open: boolean; onClose: () => void
   );
 }
 
-function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: { frame: any; onPreview: (variantIndex: number, frame: any) => void; onRedo: (frameId:number, params?:any)=>void; onRegenerate: (frameId:number, params:any)=>void; onSetFavorites: (frameId:number, favKeys:string[])=>void }) {
+function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites, onSetAccepted }: { frame: any; onPreview: (variantIndex: number, frame: any) => void; onRedo: (frameId:number, params?:any)=>void; onRegenerate: (frameId:number, params:any)=>void; onSetFavorites: (frameId:number, favKeys:string[])=>void; onSetAccepted: (frameId:number, accepted:boolean)=>void }) {
   const [mode, setMode] = useState<"view"|"tune"|"rerun">("view");
-  const [accepted, setAccepted] = useState(false);
+  const [accepted, setAccepted] = useState(!!frame.accepted);
   const [showMask, setShowMask] = useState(false);
   const initialPrompt = frame.pending_params?.prompt || frame.head?.prompt_template?.replace?.("{token}", frame.head?.trigger_token || frame.head?.trigger || "") || "";
   const [prompt, setPrompt] = useState(initialPrompt);
@@ -158,7 +158,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
             <div>
               <label className="text-xs font-medium flex items-center gap-2">Маска {maskUploading && <span className="text-[10px] opacity-60">загрузка…</span>}</label>
               <div className="mt-1 flex items-center gap-2">
-                <input type="file" accept="image/png,image/webp,image/jpeg" disabled={maskUploading} onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
+                <input type="file" accept="image/png,image/jpeg,image/webp" disabled={maskUploading} onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
                 {maskError && <span className="text-[10px] text-red-600">{maskError}</span>}
               </div>
               <p className="mt-1 text-[10px] opacity-60">Можно загрузить свою кастомную маску (применяется для следующей генерации).</p>
@@ -179,7 +179,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites }: {
       )}
 
   <div className="flex flex-wrap gap-2 mt-1">
-  <button onClick={() => setAccepted(v=>!v)} className="px-3 py-1 rounded-lg text-sm font-medium border" style={{ background: accepted? SURFACE : '#ffffff', opacity: accepted? 0.9 : 0.6 }}>{accepted? 'Принято' : 'Принять'}</button>
+  <button onClick={() => { const next = !accepted; setAccepted(next); onSetAccepted(frame.id, next); }} className="px-3 py-1 rounded-lg text-sm font-medium border" style={{ background: accepted? SURFACE : '#ffffff', opacity: accepted? 0.9 : 0.6 }}>{accepted? 'Принято' : 'Принять'}</button>
   {mode !== 'tune' && (<button onClick={()=>{ setPrompt(initialPrompt); if(frame.mask_url) setShowMask(true); setMode('tune'); }} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Настроить</button>)}
         {mode === 'tune' && (<button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Просмотр</button>)}
   <button onClick={()=>onRedo(frame.id, { force_segmentation_mask: true })} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Голова</button>
@@ -343,7 +343,10 @@ export default function SkuPage() {
         {data && (
           <div className="flex flex-col gap-10">
             {data.frames.map((fr:any) => (
-              <FrameCard key={fr.id} frame={fr} onPreview={(v,frame)=>openPreview(v,frame)} onRedo={redoFrame} onRegenerate={(id, params)=>redoFrameWithParams(id, params)} onSetFavorites={setFavorites} />
+              <FrameCard key={fr.id} frame={fr} onPreview={(v,frame)=>openPreview(v,frame)} onRedo={redoFrame} onRegenerate={(id, params)=>redoFrameWithParams(id, params)} onSetFavorites={setFavorites} onSetAccepted={(fid, acc)=>{
+                fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${fid}/accepted`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ accepted: acc }) }).catch(console.error);
+                setData((prev:any)=> prev ? { ...prev, frames: prev.frames.map((f:any)=> f.id===fid? { ...f, accepted: acc }: f)} : prev);
+              }} />
             ))}
           </div>
         )}

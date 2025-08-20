@@ -194,6 +194,7 @@ def get_frame(frame_id: int) -> Optional[Dict[str, Any]]:
                 "outputs": flat,
                 "outputs_versions": outs_versions or None,
                 "favorites": favorites,
+                "accepted": getattr(fr, 'accepted', False),
                 "pending_params": fr.pending_params,
                 "head": head_payload,
             }
@@ -370,6 +371,23 @@ def get_frame_favorites(frame_id: int) -> List[str]:
     if not fr:
         return []
     return list(fr.get("favorites") or [])
+
+def set_frame_accepted(frame_id: int, accepted: bool) -> None:
+    if USE_DB:
+        sess = get_session()
+        try:
+            fr = sess.get(models.Frame, int(frame_id))
+            if not fr:
+                return
+            fr.accepted = bool(accepted)
+            sess.add(fr); sess.commit(); return
+        finally:
+            sess.close()
+    with _lock:
+        fr = FRAMES_BY_ID.get(int(frame_id))
+        if fr is not None:
+            fr["accepted"] = bool(accepted)
+            fr["updated_at"] = _now()
 def delete_frame(frame_id: int) -> None:
     if USE_DB:
         from sqlalchemy import delete as sqldelete
@@ -576,6 +594,7 @@ __all__ = [
     "save_generation_prediction", "set_generation_outputs",
     "get_generation", "generations_for_frame",
     "set_frame_favorites", "get_frame_favorites",
+        "set_frame_accepted",
     "delete_frame", "delete_sku", "set_sku_done",
 ]
 

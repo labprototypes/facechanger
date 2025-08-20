@@ -35,7 +35,7 @@ from ..store import (
     set_generation_outputs, set_frame_outputs, append_frame_outputs_version,
     set_frame_favorites, get_frame_favorites, get_sku_by_code, set_frame_mask,
     get_all_sku_codes, list_sku_codes_by_date, set_frame_pending_params,
-    SKU_BY_CODE, delete_frame, delete_sku, set_sku_done
+    SKU_BY_CODE, delete_frame, delete_sku, set_sku_done, set_frame_accepted
 )
 USE_DB = bool(os.environ.get("DATABASE_URL"))
 
@@ -182,6 +182,9 @@ def _frame_to_public_json(fr: Dict[str, Any]) -> Dict[str, Any]:
             favs.append({"key": k, "url": _best_url_for_key(k)})
         out["favorites"] = favs
 
+    if fr.get("accepted") is not None:
+        out["accepted"] = bool(fr.get("accepted"))
+
     return out
 
 
@@ -324,6 +327,9 @@ class _MaskBody(BaseModel):
 
 class _SkuDoneBody(BaseModel):
     done: bool = True
+
+class _AcceptedBody(BaseModel):
+    accepted: bool = True
 
 @router.post("/sku/by-code/{code}/done")
 def internal_mark_sku_done(code: str, body: _SkuDoneBody):
@@ -471,6 +477,17 @@ def internal_set_mask(frame_id: int, body: _MaskBody):
         raise HTTPException(status_code=500, detail=f"failed to set mask: {e}")
     return {"ok": True, "frame_id": int(frame_id), "mask_key": key, "mask_url": _best_url_for_key(key)}
 
+@router.post("/frame/{frame_id}/accepted")
+def internal_set_accepted(frame_id: int, body: _AcceptedBody):
+    fr = get_frame(int(frame_id))
+    if not fr:
+        raise HTTPException(status_code=404, detail="frame not found")
+    try:
+        set_frame_accepted(int(frame_id), body.accepted)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"failed to set accepted: {e}")
+    return {"ok": True, "frame_id": int(frame_id), "accepted": body.accepted}
+
 
 @router.get("/sku/by-code/{code}/export-urls")
 def internal_export_urls(code: str):
@@ -539,13 +556,15 @@ def internal_download_favorites_zip(code: str):
     # collect favorite keys
     fav_items: list[tuple[str,str]] = []  # (key, arcname)
     for fr in frames:
-        favs = fr.get("favorites") or []
+        # safety: reload frame to ensure favorites current
+        fr_full = get_frame(int(fr.get('id')))
+        favs = (fr_full or fr).get("favorites") or []
         for fav in favs:
-            # favorites may be list[str] or list[dict{"key":...,"url":...}]
             k = fav.get("key") if isinstance(fav, dict) else fav
-            if not isinstance(k, str):
+            if not isinstance(k, str) or not k:
                 continue
-            arcname = f"{code}/frame_{fr['id']}/{k.split('/')[-1]}"
+            name = k.split('/')[-1] or k.replace('/', '_')
+            arcname = f"{code}/frame_{fr['id']}/{name}"
             fav_items.append((k, arcname))
     if not fav_items:
         return {"error": "no favorites"}
