@@ -346,6 +346,7 @@ def set_frame_favorites(frame_id: int, keys: List[str]) -> None:
             fr = sess.get(models.Frame, int(frame_id))
             if not fr:
                 return
+            # Replace favorites atomically
             sess.execute(sqldelete(models.FrameFavorite).where(models.FrameFavorite.frame_id == fr.id))
             for k in clean:
                 sess.add(models.FrameFavorite(frame_id=fr.id, key=k))

@@ -28,7 +28,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites, onS
   const initialPrompt = frame.pending_params?.prompt || frame.head?.prompt_template?.replace?.("{token}", frame.head?.trigger_token || frame.head?.trigger || "") || "";
   const [prompt, setPrompt] = useState(initialPrompt);
   const [promptStrength, setPromptStrength] = useState(frame.pending_params?.prompt_strength ?? 0.8);
-  const [steps, setSteps] = useState(frame.pending_params?.num_inference_steps ?? 28);
+  const [steps, setSteps] = useState(frame.pending_params?.num_inference_steps ?? 50);
   const [guidanceScale, setGuidanceScale] = useState(frame.pending_params?.guidance_scale ?? 3);
   const [numOutputs, setNumOutputs] = useState(frame.pending_params?.num_outputs ?? 3);
   const [format, setFormat] = useState(frame.pending_params?.output_format || 'png');
@@ -163,7 +163,7 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites, onS
             </div>
           </div>
           <div className="flex gap-2 flex-wrap text-xs">
-            <button onClick={()=>{ onRegenerate(frame.id, { prompt, prompt_strength: promptStrength, num_inference_steps: steps, guidance_scale: guidanceScale, num_outputs: numOutputs, output_format: format }); setMode('view'); }} className="px-3 py-1 rounded-lg font-medium" style={{ background: ACCENT }}>Запустить</button>
+            <button onClick={()=>{ onRegenerate(frame.id, { prompt, prompt_strength: promptStrength, num_inference_steps: steps, guidance_scale: guidanceScale, num_outputs: numOutputs, output_format: format, force_segmentation_mask: false }); setMode('view'); }} className="px-3 py-1 rounded-lg font-medium" style={{ background: ACCENT }}>Запустить</button>
             <button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg border" style={{ background: SURFACE }}>Отмена</button>
           </div>
         </div>

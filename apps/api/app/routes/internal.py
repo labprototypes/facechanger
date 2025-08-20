@@ -175,12 +175,11 @@ def _frame_to_public_json(fr: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 continue
 
-    # favorites (список ключей)
-    if fr.get("favorites"):
-        favs = []
-        for k in fr.get("favorites", []):
-            favs.append({"key": k, "url": _best_url_for_key(k)})
-        out["favorites"] = favs
+    # favorites (список ключей) – всегда включаем поле (стабильный JSON)
+    favs_list = []
+    for k in fr.get("favorites", []) or []:
+        favs_list.append({"key": k, "url": _best_url_for_key(k)})
+    out["favorites"] = favs_list
 
     if fr.get("accepted") is not None:
         out["accepted"] = bool(fr.get("accepted"))
