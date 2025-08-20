@@ -99,18 +99,28 @@ def _ensure_schema_patches():
         print(f"[startup] cannot get session for schema patch: {e}")
         return
     try:
+        # skus.is_done
         try:
             sess.execute(text("ALTER TABLE skus ADD COLUMN IF NOT EXISTS is_done BOOLEAN DEFAULT FALSE"))
             sess.commit()
-            # drop default to mirror migration (optional)
             try:
                 sess.execute(text("ALTER TABLE skus ALTER COLUMN is_done DROP DEFAULT"))
                 sess.commit()
             except Exception:
                 sess.rollback()
         except Exception as e:
-            sess.rollback()
-            print(f"[startup] schema patch (is_done) skipped: {e}")
+            sess.rollback(); print(f"[startup] schema patch (is_done) skipped: {e}")
+        # frames.accepted
+        try:
+            sess.execute(text("ALTER TABLE frames ADD COLUMN IF NOT EXISTS accepted BOOLEAN DEFAULT FALSE"))
+            sess.commit()
+            try:
+                sess.execute(text("ALTER TABLE frames ALTER COLUMN accepted DROP DEFAULT"))
+                sess.commit()
+            except Exception:
+                sess.rollback()
+        except Exception as e:
+            sess.rollback(); print(f"[startup] schema patch (accepted) skipped: {e}")
     finally:
         sess.close()
 
