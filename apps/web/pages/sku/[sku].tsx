@@ -25,10 +25,20 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
   const accepted = !!frame.accepted; // read-only now
   const [maskUploading, setMaskUploading] = useState(false);
   const [maskError, setMaskError] = useState<string|null>(null);
+  const [manualOpen, setManualOpen] = useState(false);
   const original = frame.original_url;
   const maskUrl = frame.mask_url;
   const outs = frame.outputs || [];
   const versions: any[] = frame.outputs_versions || (outs.length ? [outs] : []);
+  const initialPrompt = (frame.pending_params?.prompt
+    || frame.head?.prompt_template?.replace?.("{token}", frame.head?.trigger_token || frame.head?.trigger || "")
+    || "");
+  const [prompt, setPrompt] = useState<string>(initialPrompt);
+  const [promptStrength, setPromptStrength] = useState<number>(frame.pending_params?.prompt_strength ?? 0.8);
+  const [steps, setSteps] = useState<number>(frame.pending_params?.num_inference_steps ?? 50);
+  const [guidanceScale, setGuidanceScale] = useState<number>(frame.pending_params?.guidance_scale ?? 3);
+  const [numOutputs, setNumOutputs] = useState<number>(frame.pending_params?.num_outputs ?? 3);
+  const [format, setFormat] = useState<string>(frame.pending_params?.output_format || 'png');
 
   const uploadMask = async (file: File) => {
     setMaskError(null); setMaskUploading(true);
@@ -47,6 +57,26 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
     } finally { setMaskUploading(false); }
   };
 
+  const regenerate = async () => {
+    try {
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frame.id}/redo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          prompt_strength: promptStrength,
+          num_inference_steps: steps,
+          guidance_scale: guidanceScale,
+          num_outputs: numOutputs,
+          output_format: format,
+          force_segmentation_mask: false
+        })
+      });
+      setManualOpen(false);
+      window.dispatchEvent(new CustomEvent('reload-sku'));
+    } catch(e) { console.error(e); }
+  };
+
   return (
     <div className="rounded-2xl p-3 shadow-sm border flex flex-col" style={{ background: accepted? ACCENT : SURFACE, borderColor: '#0000001a' }}>
       <div className="flex items-center justify-between mb-3">
@@ -56,7 +86,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
           {accepted && <span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Pinned</span>}
         </div>
       </div>
-      <div className="mb-3">
+  <div className="mb-3">
         <div className="grid grid-cols-5 gap-2">
           <div className="relative aspect-square w-full rounded-lg overflow-hidden flex items-center justify-center bg-black/10">
             {original ? <img src={original} alt="orig" className="object-cover w-full h-full"/> : <span className="text-[10px] opacity-50">Оригинал</span>}
@@ -101,15 +131,39 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
         })}
         {versions.length === 0 && <div className="mt-3 text-xs opacity-60 italic">Ждём результаты…</div>}
       </div>
-      <div className="flex items-center gap-2 mb-3 text-xs">
-        <input type="file" accept="image/png,image/jpeg,image/webp" disabled={maskUploading} onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
-        {maskUploading && <span className="opacity-60">загрузка…</span>}
-        {maskError && <span className="text-red-600">{maskError}</span>}
-      </div>
       <div className="flex flex-wrap gap-2 mt-1">
-        {/* Removed 'Принять' and 'Голова' buttons */}
+        <button onClick={()=>setManualOpen(v=>!v)} className="px-3 py-1 rounded-lg text-sm font-medium border" style={{ background: SURFACE }}>Ручная настройка</button>
         <button onClick={()=>window.dispatchEvent(new CustomEvent('delete-frame', { detail: { frameId: frame.id } }))} className="px-3 py-1 rounded-lg text-sm font-medium border border-red-400 text-red-600" style={{ background: SURFACE }}>Удалить</button>
       </div>
+      {manualOpen && (
+        <div className="mt-3 rounded-xl border border-black/10 p-3 flex flex-col gap-3" style={{ background: SURFACE }}>
+          <div className="grid grid-cols-1 gap-3">
+            <div>
+              <label className="text-xs font-medium">Prompt</label>
+              <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={2} className="mt-1 w-full text-xs p-2 rounded border" style={{ background: SURFACE }} />
+            </div>
+            <div className="grid grid-cols-5 gap-2 text-xs">
+              <div><label className="block">Strength</label><input type="number" step="0.01" min={0.1} max={1} value={promptStrength} onChange={e=>setPromptStrength(parseFloat(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
+              <div><label className="block">Steps</label><input type="number" min={8} max={120} value={steps} onChange={e=>setSteps(parseInt(e.target.value)||0)} className="mt-1 w-full p-1 rounded border"/></div>
+              <div><label className="block">Guidance</label><input type="number" step="0.1" min={1} max={15} value={guidanceScale} onChange={e=>setGuidanceScale(parseFloat(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
+              <div><label className="block">Outputs</label><input type="number" min={1} max={6} value={numOutputs} onChange={e=>setNumOutputs(parseInt(e.target.value)||1)} className="mt-1 w-full p-1 rounded border"/></div>
+              <div><label className="block">Format</label><select value={format} onChange={e=>setFormat(e.target.value)} className="mt-1 w-full p-1 rounded border"><option value="png">png</option><option value="webp">webp</option><option value="jpeg">jpeg</option></select></div>
+            </div>
+            <div>
+              <label className="text-xs font-medium flex items-center gap-2">Маска {maskUploading && <span className="text-[10px] opacity-60">загрузка…</span>}</label>
+              <div className="mt-1 flex items-center gap-2">
+                <input type="file" accept="image/png,image/jpeg,image/webp" disabled={maskUploading} onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
+                {maskError && <span className="text-[10px] text-red-600">{maskError}</span>}
+              </div>
+              <p className="mt-1 text-[10px] opacity-60">Можно загрузить свою маску (применится к следующей генерации).</p>
+            </div>
+          </div>
+          <div className="flex gap-2 flex-wrap text-xs">
+            <button onClick={regenerate} className="px-3 py-1 rounded-lg font-medium" style={{ background: ACCENT }}>Перегенерировать</button>
+            <button onClick={()=>setManualOpen(false)} className="px-3 py-1 rounded-lg border" style={{ background: SURFACE }}>Отмена</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -148,6 +202,12 @@ export default function SkuPage() {
     const id = setInterval(load, 5000);
     return ()=>clearInterval(id);
   }, [auto, allDone, sku]);
+
+  useEffect(()=>{
+    const h = () => load();
+    window.addEventListener('reload-sku', h);
+    return () => window.removeEventListener('reload-sku', h);
+  }, [sku]);
 
   if (!sku) return <div className="p-6">Загрузка…</div>;
 
