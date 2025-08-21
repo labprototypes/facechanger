@@ -21,22 +21,14 @@ function Modal({ open, onClose, children }: { open: boolean; onClose: () => void
   );
 }
 
-function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites, onSetAccepted }: { frame: any; onPreview: (variantIndex: number, frame: any) => void; onRedo: (frameId:number, params?:any)=>void; onRegenerate: (frameId:number, params:any)=>void; onSetFavorites: (frameId:number, favKeys:string[])=>void; onSetAccepted: (frameId:number, accepted:boolean)=>void }) {
-  const [mode, setMode] = useState<"view"|"tune"|"rerun">("view");
-  const [accepted, setAccepted] = useState(!!frame.accepted);
-  const [showMask, setShowMask] = useState(false);
-  const initialPrompt = frame.pending_params?.prompt || frame.head?.prompt_template?.replace?.("{token}", frame.head?.trigger_token || frame.head?.trigger || "") || "";
-  const [prompt, setPrompt] = useState(initialPrompt);
-  const [promptStrength, setPromptStrength] = useState(frame.pending_params?.prompt_strength ?? 0.8);
-  const [steps, setSteps] = useState(frame.pending_params?.num_inference_steps ?? 50);
-  const [guidanceScale, setGuidanceScale] = useState(frame.pending_params?.guidance_scale ?? 3);
-  const [numOutputs, setNumOutputs] = useState(frame.pending_params?.num_outputs ?? 3);
-  const [format, setFormat] = useState(frame.pending_params?.output_format || 'png');
-  const outs = frame.outputs || [];
-  const versions: any[] = frame.outputs_versions || (outs.length ? [outs] : []);
-  const favKeys = (frame.favorites || []).map((f:any)=> f.key || f); // normalized keys list
+function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex: number, frame: any) => void; }) {
+  const accepted = !!frame.accepted; // read-only now
   const [maskUploading, setMaskUploading] = useState(false);
   const [maskError, setMaskError] = useState<string|null>(null);
+  const original = frame.original_url;
+  const maskUrl = frame.mask_url;
+  const outs = frame.outputs || [];
+  const versions: any[] = frame.outputs_versions || (outs.length ? [outs] : []);
 
   const uploadMask = async (file: File) => {
     setMaskError(null); setMaskUploading(true);
@@ -49,82 +41,45 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites, onS
       await putToSignedUrl(u.url, file);
       await setFrameMask(frame.id, u.key);
       frame.mask_key = u.key;
-      frame.mask_url = u.public; // signed vs public not critical; reload will normalize
+      frame.mask_url = u.public;
     } catch(e:any) {
       console.error(e); setMaskError(e.message || String(e));
-    } finally {
-      setMaskUploading(false);
-    }
+    } finally { setMaskUploading(false); }
   };
-
-  const toggleFavorite = (key:string) => {
-    let next: string[];
-    if (favKeys.includes(key)) next = favKeys.filter(k=>k!==key); else next = [...favKeys, key];
-    onSetFavorites(frame.id, next);
-  };
-  const original = frame.original_url;
-  const maskUrl = frame.mask_url;
-
-  // Когда приходят обновлённые pending_params (после редо) или пользователь заново открывает "Настроить",
-  // синхронизируем локальные состояния если мы не в процессе ручного редактирования (mode !== 'tune')
-  React.useEffect(()=>{
-    if (mode !== 'tune') {
-      const p = frame.pending_params || {};
-      setPrompt(p.prompt || frame.head?.prompt_template?.replace?.("{token}", frame.head?.trigger_token || frame.head?.trigger || "") || "");
-      setPromptStrength(p.prompt_strength ?? 0.8);
-      setSteps(p.num_inference_steps ?? 50);
-      setGuidanceScale(p.guidance_scale ?? 3);
-      setNumOutputs(p.num_outputs ?? 3);
-      setFormat(p.output_format || 'png');
-    }
-  }, [frame.pending_params, frame.id]);
 
   return (
-  <div className="rounded-2xl p-3 shadow-sm border flex flex-col" style={{ background: accepted? ACCENT : SURFACE, borderColor: "#0000001a" }}>
+    <div className="rounded-2xl p-3 shadow-sm border flex flex-col" style={{ background: accepted? ACCENT : SURFACE, borderColor: '#0000001a' }}>
       <div className="flex items-center justify-between mb-3">
-  <div className="text-sm opacity-70">Кадр #{frame.seq || frame.id}</div>
+        <div className="text-sm opacity-70">Кадр #{frame.seq || frame.id}</div>
         <div className="flex items-center gap-2">
-          {maskUrl && (
-            <button onClick={() => setShowMask(v=>!v)} className="px-2 py-1 rounded-lg text-xs border" style={{ background: showMask? ACCENT : SURFACE }}>{showMask?"Скрыть маску":"Маска"}</button>
-          )}
-          {accepted && (<span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Pinned</span>)}
+          {maskUrl && <span className="px-2 py-1 rounded-lg text-xs border" style={{ background: SURFACE }}>Маска</span>}
+          {accepted && <span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Pinned</span>}
         </div>
       </div>
-
       <div className="mb-3">
         <div className="grid grid-cols-5 gap-2">
-          {/* Original */}
           <div className="relative aspect-square w-full rounded-lg overflow-hidden flex items-center justify-center bg-black/10">
             {original ? <img src={original} alt="orig" className="object-cover w-full h-full"/> : <span className="text-[10px] opacity-50">Оригинал</span>}
           </div>
-          {/* Mask */}
-          <div className="relative aspect-square w-full rounded-lg overflow-hidden flex items-center justify-center cursor-pointer" style={{ background: maskUrl? (showMask? ACCENT : "#0000000d") : "#0000000d" }} onClick={()=> maskUrl && setShowMask(v=>!v)}>
-            {maskUrl && showMask ? <img src={maskUrl} alt="mask" className="object-contain w-full h-full mix-blend-multiply"/> : <span className="text-[10px] opacity-60">Маска</span>}
-          </div>
-          {/* First version outputs (if any) */}
-          {(() => {
-            const first = versions[0] || [];
-            const offset = 0; // first version offset in flattened outputs
-            return Array.from({ length: 3 }).map((_, i) => {
-              const o = first[i];
-              if (!o) return <div key={i} className="aspect-square w-full rounded-lg bg-black/5 flex items-center justify-center text-[10px] opacity-30">–</div>;
-              const key = o.key || o;
-              const isFav = favKeys.includes(key);
-              const flatIndex = offset + i; // global index for preview
-              return (
-                <div key={i} className="relative aspect-square w-full rounded-lg overflow-hidden border flex items-center justify-center bg-black/5">
-                  <button onClick={()=>onPreview(flatIndex, frame)} className="absolute inset-0 hover:opacity-80">
-                    <img src={o.url || o} alt={`v1-${i+1}`} className="object-cover w-full h-full"/>
-                  </button>
-                  <button onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border ${isFav? 'bg-lime-300':'bg-white/80'} transition-none shadow`}>★</button>
-                </div>
-              );
-            });
-          })()}
+            <div className="relative aspect-square w-full rounded-lg overflow-hidden flex items-center justify-center bg-black/5">
+              {maskUrl ? <img src={maskUrl} alt="mask" className="object-contain w-full h-full mix-blend-multiply"/> : <span className="text-[10px] opacity-60">Маска</span>}
+            </div>
+            {(() => {
+              const first = versions[0] || [];
+              return Array.from({ length: 3 }).map((_, i) => {
+                const o = first[i];
+                if (!o) return <div key={i} className="aspect-square w-full rounded-lg bg-black/5 flex items-center justify-center text-[10px] opacity-30">–</div>;
+                return (
+                  <div key={i} className="relative aspect-square w-full rounded-lg overflow-hidden border flex items-center justify-center bg-black/5">
+                    <button onClick={()=>onPreview(i, frame)} className="absolute inset-0 hover:opacity-80">
+                      <img src={o.url || o} alt={`v1-${i+1}`} className="object-cover w-full h-full"/>
+                    </button>
+                  </div>
+                );
+              });
+            })()}
         </div>
-        {/* Additional versions (2,3,...) each on its own row, only outputs columns (align under last 3 cols) */}
         {versions.slice(1).map((vers:any[], vi:number) => {
-          // compute offset (sum lengths of previous versions)
           const offset = versions.slice(0, vi+1).reduce((acc,v)=>acc+v.length,0);
           return (
             <div key={vi} className="grid grid-cols-5 gap-2 mt-2">
@@ -132,62 +87,27 @@ function FrameCard({ frame, onPreview, onRedo, onRegenerate, onSetFavorites, onS
               {Array.from({ length: 3 }).map((_, i) => {
                 const o = vers[i];
                 if (!o) return <div key={i} className="aspect-square w-full rounded-lg bg-black/5 flex items-center justify-center text-[10px] opacity-30">–</div>;
-                const key = o.key || o;
-                const isFav = favKeys.includes(key);
                 const flatIndex = offset + i;
                 return (
                   <div key={i} className="relative aspect-square w-full rounded-lg overflow-hidden border flex items-center justify-center bg-black/5">
                     <button onClick={()=>onPreview(flatIndex, frame)} className="absolute inset-0 hover:opacity-80">
                       <img src={o.url || o} alt={`v${vi+2}-${i+1}`} className="object-cover w-full h-full"/>
                     </button>
-                    <button onClick={()=>toggleFavorite(key)} className={`absolute top-1 right-1 w-6 h-6 rounded-full text-[10px] flex items-center justify-center border ${isFav? 'bg-lime-300':'bg-white/80'} transition-none shadow`}>★</button>
                   </div>
                 );
               })}
             </div>
           );
         })}
+        {versions.length === 0 && <div className="mt-3 text-xs opacity-60 italic">Ждём результаты…</div>}
       </div>
-
-      {mode === "view" && versions.length === 0 && (
-        <div className="mb-3 text-xs opacity-60 italic">Ждём результаты…</div>
-      )}
-
-      {mode !== "view" && (
-        <div className="rounded-xl border border-black/10 p-3 mb-3 flex flex-col gap-3" style={{ background: SURFACE }}>
-          <div className="grid grid-cols-1 gap-3">
-            <div>
-              <label className="text-xs font-medium">Prompt</label>
-              <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={2} className="mt-1 w-full text-xs p-2 rounded border" style={{ background: SURFACE }} />
-            </div>
-            <div>
-              <label className="text-xs font-medium flex items-center gap-2">Маска {maskUploading && <span className="text-[10px] opacity-60">загрузка…</span>}</label>
-              <div className="mt-1 flex items-center gap-2">
-                <input type="file" accept="image/png,image/jpeg,image/webp" disabled={maskUploading} onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
-                {maskError && <span className="text-[10px] text-red-600">{maskError}</span>}
-              </div>
-              <p className="mt-1 text-[10px] opacity-60">Можно загрузить свою кастомную маску (применяется для следующей генерации).</p>
-            </div>
-            <div className="grid grid-cols-5 gap-2 text-xs">
-              <div><label className="block">Strength</label><input type="number" step="0.01" min={0.1} max={1} value={promptStrength} onChange={e=>setPromptStrength(parseFloat(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
-              <div><label className="block">Steps</label><input type="number" min={8} max={80} value={steps} onChange={e=>setSteps(parseInt(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
-              <div><label className="block">Guidance</label><input type="number" step="0.1" min={1} max={15} value={guidanceScale} onChange={e=>setGuidanceScale(parseFloat(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
-              <div><label className="block">Outputs</label><input type="number" min={1} max={6} value={numOutputs} onChange={e=>setNumOutputs(parseInt(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
-              <div><label className="block">Format</label><select value={format} onChange={e=>setFormat(e.target.value)} className="mt-1 w-full p-1 rounded border"><option value="png">png</option><option value="webp">webp</option><option value="jpeg">jpeg</option></select></div>
-            </div>
-          </div>
-          <div className="flex gap-2 flex-wrap text-xs">
-            <button onClick={()=>{ onRegenerate(frame.id, { prompt, prompt_strength: promptStrength, num_inference_steps: steps, guidance_scale: guidanceScale, num_outputs: numOutputs, output_format: format, force_segmentation_mask: false }); setMode('view'); }} className="px-3 py-1 rounded-lg font-medium" style={{ background: ACCENT }}>Запустить</button>
-            <button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg border" style={{ background: SURFACE }}>Отмена</button>
-          </div>
-        </div>
-      )}
-
-  <div className="flex flex-wrap gap-2 mt-1">
-  <button onClick={() => { const next = !accepted; setAccepted(next); onSetAccepted(frame.id, next); }} className="px-3 py-1 rounded-lg text-sm font-medium border" style={{ background: accepted? SURFACE : '#ffffff', opacity: accepted? 0.9 : 0.6 }}>{accepted? 'Принято' : 'Принять'}</button>
-  {mode !== 'tune' && (<button onClick={()=>{ setPrompt(initialPrompt); if(frame.mask_url) setShowMask(true); setMode('tune'); }} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Настроить</button>)}
-        {mode === 'tune' && (<button onClick={()=>setMode('view')} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Просмотр</button>)}
-  <button onClick={()=>onRedo(frame.id, { force_segmentation_mask: true })} className="px-3 py-1 rounded-lg text-sm font-medium border border-black/10" style={{ background: SURFACE }}>Голова</button>
+      <div className="flex items-center gap-2 mb-3 text-xs">
+        <input type="file" accept="image/png,image/jpeg,image/webp" disabled={maskUploading} onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
+        {maskUploading && <span className="opacity-60">загрузка…</span>}
+        {maskError && <span className="text-red-600">{maskError}</span>}
+      </div>
+      <div className="flex flex-wrap gap-2 mt-1">
+        {/* Removed 'Принять' and 'Голова' buttons */}
         <button onClick={()=>window.dispatchEvent(new CustomEvent('delete-frame', { detail: { frameId: frame.id } }))} className="px-3 py-1 rounded-lg text-sm font-medium border border-red-400 text-red-600" style={{ background: SURFACE }}>Удалить</button>
       </div>
     </div>
@@ -236,21 +156,8 @@ export default function SkuPage() {
     setPreviewOpen(true);
   };
 
-  const redoFrame = async (frameId: number, params?: any) => {
-    try {
-      const opts: any = { method: 'POST' };
-      if (params) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(params); }
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frameId}/redo`, opts);
-      load();
-    } catch(e) { console.error(e); }
-  };
+  // redo removed from UI
 
-  const redoFrameWithParams = async (frameId: number, params: any) => {
-    try {
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frameId}/redo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
-      load();
-    } catch(e) { console.error(e); }
-  };
 
   const exportAll = async () => {
     if (!sku) return;
@@ -269,22 +176,7 @@ export default function SkuPage() {
     try { await navigator.clipboard.writeText(exportUrls.join('\n')); setCopied(true); setTimeout(()=>setCopied(false), 2000); } catch(e){ console.error(e);}  
   };
 
-  const setFavorites = async (frameId:number, keys:string[]) => {
-    try {
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frameId}/favorites`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys }) });
-      // refresh specific frame locally
-      setData((prev:any)=>{
-        if (!prev) return prev;
-        return { ...prev, frames: prev.frames.map((f:any)=> f.id===frameId ? { ...f, favorites: keys.map(k=>({ key: k, url: k.startsWith('http')? k : f.outputs?.find((o:any)=> (o.key||o)===k)?.url || '' })) } : f ) };
-      });
-    } catch(e) { console.error(e); }
-  };
-
-  const downloadFavoritesZip = () => {
-    if (!sku) return;
-    const url = `${process.env.NEXT_PUBLIC_API_URL || ''}/internal/sku/by-code/${sku}/favorites.zip`;
-    window.open(url, '_blank');
-  };
+  // favorites removed; download favorites removed
 
   const deleteFrameHandler = (e:any) => {
     const { frameId } = e.detail || {};
@@ -337,7 +229,7 @@ export default function SkuPage() {
             <button onClick={deleteSku} className="px-3 py-1 rounded-lg border text-xs text-red-600 border-red-400" style={{ background: SURFACE }}>Удалить SKU</button>
             <button onClick={exportAll} className="px-3 py-1 rounded-lg border text-xs" style={{ background: SURFACE }}>{exporting? '...' : 'Экспорт URL'}</button>
             {exportUrls && <button onClick={copyAll} className="px-3 py-1 rounded-lg border text-xs" style={{ background: copied? ACCENT : SURFACE }}>{copied? 'Скопировано' : 'Копировать'}</button>}
-            <button onClick={downloadFavoritesZip} className="px-3 py-1 rounded-lg border text-xs" style={{ background: SURFACE }}>Скачать избранные</button>
+            {/* removed favorites download button */}
             {allDone && <span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Готово</span>}
           </div>
         </div>
@@ -348,10 +240,7 @@ export default function SkuPage() {
         {data && (
           <div className="flex flex-col gap-10">
             {data.frames.map((fr:any) => (
-              <FrameCard key={fr.id} frame={fr} onPreview={(v,frame)=>openPreview(v,frame)} onRedo={redoFrame} onRegenerate={(id, params)=>redoFrameWithParams(id, params)} onSetFavorites={setFavorites} onSetAccepted={(fid, acc)=>{
-                fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${fid}/accepted`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ accepted: acc }) }).catch(console.error);
-                setData((prev:any)=> prev ? { ...prev, frames: prev.frames.map((f:any)=> f.id===fid? { ...f, accepted: acc }: f)} : prev);
-              }} />
+              <FrameCard key={fr.id} frame={fr} onPreview={(v,frame)=>openPreview(v,frame)} />
             ))}
           </div>
         )}
