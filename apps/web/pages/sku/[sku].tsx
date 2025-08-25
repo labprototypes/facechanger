@@ -152,7 +152,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
             <div>
               <label className="text-xs font-medium flex items-center gap-2">Маска {maskUploading && <span className="text-[10px] opacity-60">загрузка…</span>}</label>
               <div className="mt-1 flex items-center gap-2">
-                <input type="file" accept="image/png,image/jpeg,image/webp" disabled={maskUploading} onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
+                <input type="file" accept="image/png,image/jpeg" disabled={maskUploading} onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
                 {maskError && <span className="text-[10px] text-red-600">{maskError}</span>}
               </div>
               <p className="mt-1 text-[10px] opacity-60">Можно загрузить свою маску (применится к следующей генерации).</p>

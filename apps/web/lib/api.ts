@@ -18,7 +18,7 @@ export async function requestUploadUrls(
   sku: string,
   files: File[]
 ): Promise<{ urls: { filename: string; url: string; key: string; public: string }[] }> {
-  const res = await fetch(`${API_BASE}/skus/${encodeURIComponent(sku)}/upload-urls`, {
+  const res = await fetch(`${API_BASE}/api/skus/${encodeURIComponent(sku)}/upload-urls`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ files: files.map(f => ({ name: f.name, type: f.type, size: f.size })) })
@@ -38,14 +38,14 @@ export async function putToSignedUrl(signedUrl: string, file: File) {
 }
 
 export async function registerFrames(sku: string, items: { filename: string; key: string }[]) {
-  return api(`/skus/${encodeURIComponent(sku)}/frames`, {
+  return api(`/api/skus/${encodeURIComponent(sku)}/frames`, {
     method: "POST",
     body: JSON.stringify({ files: items })
   });
 }
 
 export async function startProcess(sku: string) {
-  return api(`/skus/${encodeURIComponent(sku)}/process`, { method: "POST" });
+  return api(`/api/skus/${encodeURIComponent(sku)}/process`, { method: "POST" });
 }
 
 export async function fetchSkuView(code: string) {
