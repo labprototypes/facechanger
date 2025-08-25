@@ -184,6 +184,10 @@ def _frame_to_public_json(fr: Dict[str, Any]) -> Dict[str, Any]:
     if fr.get("accepted") is not None:
         out["accepted"] = bool(fr.get("accepted"))
 
+    # --- pending_params (нужны воркеру для пере-запуска с ручными параметрами) ---
+    if fr.get("pending_params"):
+        out["pending_params"] = fr.get("pending_params")
+
     return out
 
 
