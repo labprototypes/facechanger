@@ -90,6 +90,7 @@ async function uploadWithFallback(sku: string, files: File[]) {
 }
 
 export default function UploadBySkuPage() {
+  const DEFAULT_BRANDS = ["Sportmaster","Love Republic","Lamoda"];
   const [sku, setSku] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [heads, setHeads] = useState<any[]>([]);
@@ -97,15 +98,17 @@ export default function UploadBySkuPage() {
   const [stage, setStage] = useState<Stage>("idle");
   const [msg, setMsg] = useState<string>("");
   const [brand, setBrand] = useState<string>("Sportmaster");
-  const [brands, setBrands] = useState<string[]>(["Sportmaster","Love Republic","Lamoda"]);
+  const [brands, setBrands] = useState<string[]>(DEFAULT_BRANDS);
 
   useEffect(() => {
     const base = apiBase ? `${apiBase}` : '';
     fetch(`${base}/api/heads`).then(r => { if(!r.ok) throw new Error(String(r.status)); return r.json(); }).then(setHeads).catch(()=>{});
     fetch(`${base}/api/dashboard/brands`).then(r => r.ok ? r.json() : Promise.reject()).then(d => {
-      if(d.items?.length){
-        setBrands(d.items);
-        if(!d.items.includes(brand)) setBrand(d.items[0]);
+      const fetched: string[] = Array.isArray(d.items) ? d.items : [];
+      const merged = Array.from(new Set([...(DEFAULT_BRANDS||[]), ...fetched]));
+      if (merged.length) {
+        setBrands(merged);
+        if(!merged.includes(brand)) setBrand(merged[0]);
       }
     }).catch(()=>{});
   }, [brand]);
