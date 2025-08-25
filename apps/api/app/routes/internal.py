@@ -631,8 +631,29 @@ def internal_download_batch_export(date: str):
             frames = list_frames_for_sku(sid) or []
             any_added = False
             for fr in frames:
-                favs = fr.get("favorites") or []
-                for k in favs:
+                # Prefer all outputs; if empty, fallback to favorites list
+                keys: list[str] = []
+                outs = fr.get("outputs") or []
+                if isinstance(outs, list) and outs:
+                    for o in outs:
+                        if isinstance(o, dict):
+                            k = o.get("key") or ""
+                        else:
+                            k = str(o)
+                        if k and "://" not in k:  # expect S3 key
+                            keys.append(k)
+                if not keys:
+                    favs = fr.get("favorites") or []
+                    for fv in favs:
+                        k = fv.get("key") if isinstance(fv, dict) else fv
+                        if isinstance(k, str) and k:
+                            keys.append(k)
+                # de-dup
+                seen = set()
+                for k in keys:
+                    if k in seen:
+                        continue
+                    seen.add(k)
                     try:
                         obj = s3c.get_object(Bucket=S3_BUCKET, Key=k)
                         data = obj['Body'].read()
@@ -643,7 +664,7 @@ def internal_download_batch_export(date: str):
                         continue
             if not any_added:
                 # маркер пустого SKU
-                zf.writestr(f"{code}/README.txt", "No favorites selected")
+                zf.writestr(f"{code}/README.txt", "No outputs")
     buf.seek(0)
     return StreamingResponse(buf, media_type='application/zip', headers={"Content-Disposition": f"attachment; filename=batch_{date}.zip"})
 
