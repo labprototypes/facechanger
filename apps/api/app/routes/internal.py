@@ -638,6 +638,62 @@ def internal_download_favorites_zip(code: str):
     buf.seek(0)
     return StreamingResponse(buf, media_type='application/zip', headers={"Content-Disposition": f"attachment; filename={code}_favorites.zip"})
 
+@router.get("/sku/by-code/{code}/export.zip")
+def internal_download_sku_export(code: str):
+    """Скачать ZIP со всеми результатами генераций для одного SKU.
+    Если у кадра нет outputs — используем его favorites как запасной вариант.
+    """
+    from io import BytesIO
+    import zipfile
+    if USE_DB:
+        sku = get_sku_by_code(code)
+        if not sku:
+            raise HTTPException(status_code=404, detail="sku not found")
+        sid = sku["id"]
+    else:
+        if code not in SKU_BY_CODE:
+            raise HTTPException(status_code=404, detail="sku not found")
+        sid = SKU_BY_CODE[code]
+    frames = list_frames_for_sku(sid) or []
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        s3c = _s3_client()
+        any_added = False
+        for fr in frames:
+            keys: list[str] = []
+            outs = fr.get("outputs") or []
+            if isinstance(outs, list) and outs:
+                for o in outs:
+                    if isinstance(o, dict):
+                        k = o.get("key") or ""
+                    else:
+                        k = str(o)
+                    if k and "://" not in k:
+                        keys.append(k)
+            if not keys:
+                favs = fr.get("favorites") or []
+                for fv in favs:
+                    k = fv.get("key") if isinstance(fv, dict) else fv
+                    if isinstance(k, str) and k:
+                        keys.append(k)
+            seen = set()
+            for k in keys:
+                if k in seen:
+                    continue
+                seen.add(k)
+                try:
+                    obj = s3c.get_object(Bucket=S3_BUCKET, Key=k)
+                    data = obj['Body'].read()
+                    arcname = f"{code}/frame_{fr['id']}/{k.split('/')[-1]}"
+                    zf.writestr(arcname, data)
+                    any_added = True
+                except Exception:
+                    continue
+        if not any_added:
+            zf.writestr(f"{code}/README.txt", "No outputs")
+    buf.seek(0)
+    return StreamingResponse(buf, media_type='application/zip', headers={"Content-Disposition": f"attachment; filename={code}.zip"})
+
 @router.get("/batch/{date}/export.zip")
 def internal_download_batch_export(date: str):
     from io import BytesIO

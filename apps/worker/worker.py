@@ -658,16 +658,46 @@ def process_frame(frame_id: int):
         "image": image_url_for_model,
         "mask": mask_url_for_model,
     }
+    # Try to preserve original aspect/size if model supports it: add width/height based on original image
+    # Compute from bytes we already fetched
+    try:
+        import numpy as _np
+        import cv2 as _cv2
+        _arr = _np.frombuffer(img_bytes, _np.uint8)
+        _img = _cv2.imdecode(_arr, _cv2.IMREAD_COLOR)
+        _H, _W = _img.shape[:2]
+        # Clamp to a reasonable max while keeping ratio; round to multiple of 8
+        _max_side = int(os.environ.get("REPLICATE_MAX_SIDE", "1024"))
+        scale = 1.0
+        if max(_W, _H) > _max_side:
+            scale = _max_side / float(max(_W, _H))
+        _w = int(round((_W * scale) / 8.0) * 8)
+        _h = int(round((_H * scale) / 8.0) * 8)
+        if _w >= 64 and _h >= 64:
+            input_with_size = dict(input_dict)
+            input_with_size.update({"width": _w, "height": _h})
+        else:
+            input_with_size = input_dict
+    except Exception:
+        input_with_size = input_dict
     try:
         print(f"[worker] frame {frame_id}: pending_params={pending} head_params={head_params} final_input={input_dict}")
     except Exception:
         pass
 
     try:
-        pred = replicate_create_prediction(model_version, input_dict, idempotency_key=f"gen-{generation_id}")
+        pred = replicate_create_prediction(model_version, input_with_size, idempotency_key=f"gen-{generation_id}")
     except Exception as e:
-        print(f"[worker] replicate create failed frame={frame_id} gen={generation_id}: {e}")
-        return
+        print(f"[worker] replicate create failed (with size) frame={frame_id} gen={generation_id}: {e}")
+        # Fallback: try without width/height if present
+        try:
+            if input_with_size is not input_dict:
+                pred = replicate_create_prediction(model_version, input_dict, idempotency_key=f"gen-{generation_id}-fallback")
+            else:
+                raise e
+        except Exception as e2:
+            print(f"[worker] replicate create failed (fallback) frame={frame_id} gen={generation_id}: {e2}")
+            return
     pred_id = pred.get("id")
     pred_get = (pred.get("urls") or {}).get("get")
     if not pred_id or not pred_get:

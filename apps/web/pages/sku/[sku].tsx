@@ -5,6 +5,31 @@ import { useRouter } from "next/router";
 import { fetchSkuViewByCode as fetchSkuView, setFrameMask, requestUploadUrls, putToSignedUrl } from "../../lib/api";
 
 const BG = "#f2f2f2"; const TEXT = "#000000"; const SURFACE = "#ffffff"; const ACCENT = "#B8FF01";
+function FrameMedia({ original, maskUrl, versions, onPreview, frame }: any) {
+  const [ratioStr, setRatioStr] = useState<string>('1 / 1');
+  useEffect(() => {
+    if (!original) return;
+    const im = new Image();
+    im.onload = () => {
+      const w = im.naturalWidth || 1; const h = im.naturalHeight || 1;
+      const r = `${w} / ${h}`;
+      setRatioStr(r);
+      // stash on frame so other tiles can reuse without reloading
+      frame._ratioStr = r;
+    };
+    im.src = original;
+  }, [original]);
+  return (
+    <>
+      <div className="relative w-full rounded-lg overflow-hidden flex items-center justify-center bg-black/10" style={{ aspectRatio: ratioStr }}>
+        {original ? <img src={original} alt="orig" className="object-cover w-full h-full"/> : <span className="text-[10px] opacity-50">Оригинал</span>}
+      </div>
+      <div className="relative w-full rounded-lg overflow-hidden flex items-center justify-center bg-black/5" style={{ aspectRatio: ratioStr }}>
+        {maskUrl ? <img src={maskUrl} alt="mask" className="object-contain w-full h-full mix-blend-multiply"/> : <span className="text-[10px] opacity-60">Маска</span>}
+      </div>
+    </>
+  );
+}
 
 function Modal({ open, onClose, children }: { open: boolean; onClose: () => void; children: React.ReactNode }) {
   if (!open) return null;
@@ -41,6 +66,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
   const [format, setFormat] = useState<string>(frame.pending_params?.output_format || 'png');
   const [paintOpen, setPaintOpen] = useState(false);
   const [paintMsg, setPaintMsg] = useState<string>("");
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const uploadMask = async (file: File) => {
     setMaskError(null); setMaskUploading(true);
@@ -63,7 +89,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
   const MaskPainter = () => {
     const [loaded, setLoaded] = useState(false);
     const [imgSize, setImgSize] = useState<{w:number,h:number}|null>(null);
-    const [brush, setBrush] = useState<number>(24); // 4 sizes: 12, 24, 36, 48
+  const [brush, setBrush] = useState<number>(32); // slider: 8..160
     const [mode, setMode] = useState<'draw'|'erase'>('draw');
     const containerRef = React.useRef<HTMLDivElement|null>(null);
     const overlayRef = React.useRef<HTMLCanvasElement|null>(null);
@@ -179,11 +205,10 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
 
     return (
       <div className="mt-2 border rounded-lg p-2" style={{ background: SURFACE }}>
-        <div className="flex items-center gap-2 text-xs mb-2">
+        <div className="flex items-center gap-3 text-xs mb-2">
           <span>Кисть:</span>
-          {[12,24,36,48].map(sz => (
-            <button key={sz} onClick={()=>setBrush(sz)} className={`px-2 py-1 rounded border ${brush===sz?'font-semibold':''}`} style={{ background: SURFACE }}>{sz}</button>
-          ))}
+          <input type="range" min={8} max={160} step={2} value={brush} onChange={e=>setBrush(parseInt(e.target.value)||8)} className="w-40" />
+          <span className="tabular-nums w-12 text-right">{brush}px</span>
           <span className="ml-2">Режим:</span>
           <button onClick={()=>setMode('draw')} className={`px-2 py-1 rounded border ${mode==='draw'?'font-semibold':''}`} style={{ background: SURFACE }}>Рисовать</button>
           <button onClick={()=>setMode('erase')} className={`px-2 py-1 rounded border ${mode==='erase'?'font-semibold':''}`} style={{ background: SURFACE }}>Стирать</button>
@@ -211,6 +236,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
 
   const regenerate = async () => {
     try {
+      setIsGenerating(true);
       await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frame.id}/redo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -227,32 +253,29 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
       setManualOpen(false);
       window.dispatchEvent(new CustomEvent('reload-sku'));
     } catch(e) { console.error(e); }
+    finally { setTimeout(()=>setIsGenerating(false), 2000); }
   };
 
   return (
     <div className="rounded-2xl p-3 shadow-sm border flex flex-col" style={{ background: accepted? ACCENT : SURFACE, borderColor: '#0000001a' }}>
-      <div className="flex items-center justify-between mb-3">
+    <div className="flex items-center justify-between mb-3">
         <div className="text-sm opacity-70">Кадр #{frame.seq || frame.id}</div>
         <div className="flex items-center gap-2">
+      {isGenerating && <span className="px-2 py-1 rounded-lg text-xs border" style={{ background: SURFACE }}>Готовим новые генерации…</span>}
           {maskUrl && <span className="px-2 py-1 rounded-lg text-xs border" style={{ background: SURFACE }}>Маска</span>}
           {accepted && <span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Pinned</span>}
         </div>
       </div>
   <div className="mb-3">
-        <div className="grid grid-cols-5 gap-2">
-          <div className="relative aspect-square w-full rounded-lg overflow-hidden flex items-center justify-center bg-black/10">
-            {original ? <img src={original} alt="orig" className="object-cover w-full h-full"/> : <span className="text-[10px] opacity-50">Оригинал</span>}
-          </div>
-            <div className="relative aspect-square w-full rounded-lg overflow-hidden flex items-center justify-center bg-black/5">
-              {maskUrl ? <img src={maskUrl} alt="mask" className="object-contain w-full h-full mix-blend-multiply"/> : <span className="text-[10px] opacity-60">Маска</span>}
-            </div>
+  <div className="grid grid-cols-5 gap-2">
+    <FrameMedia original={original} maskUrl={maskUrl} versions={versions} onPreview={onPreview} frame={frame} />
             {(() => {
               const first = versions[0] || [];
               return Array.from({ length: 3 }).map((_, i) => {
                 const o = first[i];
                 if (!o) return <div key={i} className="aspect-square w-full rounded-lg bg-black/5 flex items-center justify-center text-[10px] opacity-30">–</div>;
                 return (
-                  <div key={i} className="relative aspect-square w-full rounded-lg overflow-hidden border flex items-center justify-center bg-black/5">
+      <div key={i} className="relative w-full rounded-lg overflow-hidden border flex items-center justify-center bg-black/5" style={{ aspectRatio: (frame._ratioStr||'1 / 1') }}>
                     <button onClick={()=>onPreview(i, frame)} className="absolute inset-0 hover:opacity-80">
                       <img src={o.url || o} alt={`v1-${i+1}`} className="object-cover w-full h-full"/>
                     </button>
@@ -264,14 +287,14 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
         {versions.slice(1).map((vers:any[], vi:number) => {
           const offset = versions.slice(0, vi+1).reduce((acc,v)=>acc+v.length,0);
           return (
-            <div key={vi} className="grid grid-cols-5 gap-2 mt-2">
+    <div key={vi} className="grid grid-cols-5 gap-2 mt-2">
               <div className="col-span-2" />
               {Array.from({ length: 3 }).map((_, i) => {
                 const o = vers[i];
                 if (!o) return <div key={i} className="aspect-square w-full rounded-lg bg-black/5 flex items-center justify-center text-[10px] opacity-30">–</div>;
                 const flatIndex = offset + i;
                 return (
-                  <div key={i} className="relative aspect-square w-full rounded-lg overflow-hidden border flex items-center justify-center bg-black/5">
+      <div key={i} className="relative w-full rounded-lg overflow-hidden border flex items-center justify-center bg-black/5" style={{ aspectRatio: (frame._ratioStr||'1 / 1') }}>
                     <button onClick={()=>onPreview(flatIndex, frame)} className="absolute inset-0 hover:opacity-80">
                       <img src={o.url || o} alt={`v${vi+2}-${i+1}`} className="object-cover w-full h-full"/>
                     </button>
@@ -437,12 +460,11 @@ export default function SkuPage() {
             <button onClick={toggleSkuDone} className="px-3 py-1 rounded-lg border text-xs font-medium" style={{ background: skuDone? SURFACE : ACCENT }}>{skuDone? 'Снять Готово' : 'Готово'}</button>
             <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)} /> авто</label>
             <div className="w-40 h-2 bg-black/10 rounded-full overflow-hidden">
-              <div className="h-full transition-all" style={{ width: `${progressPct}%`, background: skuDone? '#ffffff' : 'limegreen' }} />
+              <div className="h-full transition-all" style={{ width: `${progressPct}%`, background: skuDone? '#ffffff' : ACCENT }} />
             </div>
             <span className="text-xs opacity-70 w-10 text-right">{progressPct}%</span>
             <button onClick={deleteSku} className="px-3 py-1 rounded-lg border text-xs text-red-600 border-red-400" style={{ background: SURFACE }}>Удалить SKU</button>
-            <button onClick={exportAll} className="px-3 py-1 rounded-lg border text-xs" style={{ background: SURFACE }}>{exporting? '...' : 'Экспорт URL'}</button>
-            {exportUrls && <button onClick={copyAll} className="px-3 py-1 rounded-lg border text-xs" style={{ background: copied? ACCENT : SURFACE }}>{copied? 'Скопировано' : 'Копировать'}</button>}
+            <a href={`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/sku/by-code/${sku}/export.zip`} className="px-3 py-1 rounded-lg border text-xs" style={{ background: SURFACE }}>Экспорт SKU</a>
             {/* removed favorites download button */}
             {allDone && <span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Готово</span>}
           </div>
