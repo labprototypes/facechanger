@@ -39,6 +39,8 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
   const [guidanceScale, setGuidanceScale] = useState<number>(frame.pending_params?.guidance_scale ?? 3);
   const [numOutputs, setNumOutputs] = useState<number>(frame.pending_params?.num_outputs ?? 3);
   const [format, setFormat] = useState<string>(frame.pending_params?.output_format || 'png');
+  const [paintOpen, setPaintOpen] = useState(false);
+  const [paintMsg, setPaintMsg] = useState<string>("");
 
   const uploadMask = async (file: File) => {
     setMaskError(null); setMaskUploading(true);
@@ -55,6 +57,152 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
     } catch(e:any) {
       console.error(e); setMaskError(e.message || String(e));
     } finally { setMaskUploading(false); }
+  };
+
+  // --- Simple mask painter (canvas over original) ---
+  const MaskPainter = () => {
+    const [loaded, setLoaded] = useState(false);
+    const [imgSize, setImgSize] = useState<{w:number,h:number}|null>(null);
+    const [brush, setBrush] = useState<number>(24); // 4 sizes: 12, 24, 36, 48
+    const [mode, setMode] = useState<'draw'|'erase'>('draw');
+    const containerRef = React.useRef<HTMLDivElement|null>(null);
+    const overlayRef = React.useRef<HTMLCanvasElement|null>(null);
+    const offscreenRef = React.useRef<HTMLCanvasElement|null>(null);
+    const imgRef = React.useRef<HTMLImageElement|null>(null);
+    const isDownRef = React.useRef<boolean>(false);
+    const lastRef = React.useRef<{x:number,y:number}|null>(null);
+
+    useEffect(() => {
+      if (!frame.original_url) return;
+      const im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload = () => {
+        setImgSize({ w: im.naturalWidth, h: im.naturalHeight });
+        // build offscreen at original size
+        const off = document.createElement('canvas');
+        off.width = im.naturalWidth; off.height = im.naturalHeight;
+        const octx = off.getContext('2d')!;
+        octx.fillStyle = '#000'; octx.fillRect(0,0,off.width,off.height);
+        offscreenRef.current = off;
+        imgRef.current = im;
+        setLoaded(true);
+        requestAnimationFrame(syncOverlay);
+      };
+      im.onerror = () => setPaintMsg('Не удалось загрузить оригинал');
+      im.src = frame.original_url;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [frame.original_url]);
+
+    const getScales = () => {
+      const cont = containerRef.current; const im = imgRef.current; const ov = overlayRef.current;
+      if (!cont || !im || !ov) return { dispW: 0, dispH: 0, sx: 1, sy: 1 };
+      const cw = cont.clientWidth; const ratio = im.naturalWidth / im.naturalHeight;
+      const dispW = cw; const dispH = Math.round(cw / ratio);
+      const sx = im.naturalWidth / dispW; const sy = im.naturalHeight / dispH;
+      return { dispW, dispH, sx, sy };
+    };
+
+    const syncOverlay = () => {
+      const ov = overlayRef.current; const off = offscreenRef.current; const im = imgRef.current; const cont = containerRef.current;
+      if (!ov || !off || !im || !cont) return;
+      const { dispW, dispH } = getScales();
+      ov.width = dispW; ov.height = dispH;
+      const ctx = ov.getContext('2d')!;
+      ctx.clearRect(0,0,ov.width,ov.height);
+      // draw original for reference
+      ctx.drawImage(im, 0, 0, ov.width, ov.height);
+      // overlay mask preview with multiply
+      ctx.save();
+      ctx.globalAlpha = 0.6;
+      ctx.filter = 'none';
+      // scale offscreen onto overlay
+      ctx.drawImage(off, 0, 0, off.width, off.height, 0, 0, ov.width, ov.height);
+      ctx.restore();
+    };
+
+    useEffect(() => {
+      const onResize = () => requestAnimationFrame(syncOverlay);
+      window.addEventListener('resize', onResize);
+      return () => window.removeEventListener('resize', onResize);
+    }, []);
+
+    const pointer = (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const ov = overlayRef.current; const off = offscreenRef.current; if (!ov || !off) return { x:0, y:0, ox:0, oy:0 };
+      const rect = ov.getBoundingClientRect();
+      const x = e.clientX - rect.left; const y = e.clientY - rect.top;
+      const { sx, sy } = getScales();
+      return { x, y, ox: Math.round(x * sx), oy: Math.round(y * sy) };
+    };
+
+    const drawTo = (ox: number, oy: number, lx?: number, ly?: number) => {
+      const off = offscreenRef.current; if (!off) return;
+      const ctx = off.getContext('2d')!;
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = mode === 'draw' ? '#FFFFFF' : '#000000';
+      ctx.lineWidth = brush;
+      ctx.globalCompositeOperation = 'source-over';
+      if (lx == null || ly == null) {
+        ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox+0.01, oy+0.01); ctx.stroke();
+      } else {
+        ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(ox, oy); ctx.stroke();
+      }
+    };
+
+    const onDown = (e: any) => { isDownRef.current = true; const p = pointer(e); lastRef.current = { x: p.ox, y: p.oy }; drawTo(p.ox, p.oy); syncOverlay(); };
+    const onMove = (e: any) => { if (!isDownRef.current) return; const p = pointer(e); const last = lastRef.current; drawTo(p.ox, p.oy, last?.x, last?.y); lastRef.current = { x: p.ox, y: p.oy }; syncOverlay(); };
+    const onUp = () => { isDownRef.current = false; lastRef.current = null; };
+
+    const onClear = () => {
+      const off = offscreenRef.current; if (!off) return;
+      const ctx = off.getContext('2d')!; ctx.fillStyle = '#000'; ctx.fillRect(0,0,off.width,off.height); syncOverlay();
+    };
+
+    const onSave = async () => {
+      try {
+        setPaintMsg('Сохраняем маску…');
+        const off = offscreenRef.current; if (!off) throw new Error('offscreen missing');
+        // ensure binary mask by thresholding
+        const ctx = off.getContext('2d')!;
+        const img = ctx.getImageData(0,0,off.width, off.height);
+        const d = img.data;
+        for (let i=0;i<d.length;i+=4){ const v = d[i] > 127 ? 255 : 0; d[i]=d[i+1]=d[i+2]=v; d[i+3]=255; }
+        ctx.putImageData(img,0,0);
+        const blob: Blob = await new Promise(res => off.toBlob(b => res(b as Blob), 'image/png')); 
+        const file = new File([blob], `mask_${frame.id}.png`, { type: 'image/png' });
+        await uploadMask(file);
+        setPaintMsg('Маска сохранена');
+        setPaintOpen(false);
+      } catch(e:any){ setPaintMsg(e.message || 'Ошибка'); }
+    };
+
+    return (
+      <div className="mt-2 border rounded-lg p-2" style={{ background: SURFACE }}>
+        <div className="flex items-center gap-2 text-xs mb-2">
+          <span>Кисть:</span>
+          {[12,24,36,48].map(sz => (
+            <button key={sz} onClick={()=>setBrush(sz)} className={`px-2 py-1 rounded border ${brush===sz?'font-semibold':''}`} style={{ background: SURFACE }}>{sz}</button>
+          ))}
+          <span className="ml-2">Режим:</span>
+          <button onClick={()=>setMode('draw')} className={`px-2 py-1 rounded border ${mode==='draw'?'font-semibold':''}`} style={{ background: SURFACE }}>Рисовать</button>
+          <button onClick={()=>setMode('erase')} className={`px-2 py-1 rounded border ${mode==='erase'?'font-semibold':''}`} style={{ background: SURFACE }}>Стирать</button>
+          <button onClick={onClear} className="ml-auto px-2 py-1 rounded border" style={{ background: SURFACE }}>Очистить</button>
+          <button onClick={onSave} className="px-2 py-1 rounded font-medium" style={{ background: ACCENT }}>Сохранить маску</button>
+        </div>
+        <div ref={containerRef} className="relative w-full" style={{ maxWidth: '100%' }}>
+          {/* overlay canvas used for display and pointer events */}
+          <canvas
+            ref={overlayRef}
+            className="block w-full touch-none"
+            onPointerDown={onDown}
+            onPointerMove={onMove}
+            onPointerUp={onUp}
+            onPointerCancel={onUp}
+          />
+          {!loaded && <div className="absolute inset-0 flex items-center justify-center text-xs opacity-70">Загрузка оригинала…</div>}
+        </div>
+        {paintMsg && <div className="mt-2 text-xs opacity-70">{paintMsg}</div>}
+      </div>
+    );
   };
 
   const regenerate = async () => {
@@ -153,9 +301,11 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
               <label className="text-xs font-medium flex items-center gap-2">Маска {maskUploading && <span className="text-[10px] opacity-60">загрузка…</span>}</label>
               <div className="mt-1 flex items-center gap-2">
                 <input type="file" accept="image/png,image/jpeg" disabled={maskUploading} onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
+                <button onClick={()=> setPaintOpen(v=>!v)} className="px-2 py-1 rounded border text-xs" style={{ background: SURFACE }}>{paintOpen? 'Скрыть рисование' : 'Нарисовать маску'}</button>
                 {maskError && <span className="text-[10px] text-red-600">{maskError}</span>}
               </div>
               <p className="mt-1 text-[10px] opacity-60">Можно загрузить свою маску (применится к следующей генерации).</p>
+              {paintOpen && <MaskPainter />}
             </div>
           </div>
           <div className="flex gap-2 flex-wrap text-xs">
