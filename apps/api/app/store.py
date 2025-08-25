@@ -47,10 +47,64 @@ def create_head(payload: Dict[str, Any]):
         "name": payload["name"],
         "trigger": payload.get("trigger", ""),
         "model_version": payload["model_version"],
-    "params": payload.get("params", {}),
-    "prompt_template": payload.get("prompt_template"),
+        "params": payload.get("params", {}),
+        "prompt_template": payload.get("prompt_template"),
     }
     return HEADS[head_id]
+
+
+# ---------------- Defaults seeding ----------------
+def _seed_default_head_jane():
+    """Ensure head model "Jane" (lamjane) exists in both in-memory registry and DB (if enabled)."""
+    VERSION_SHA = "132c564100cbfb69bd12162fcd00869fe1fca441e12d0274e08f8ee9f11bd305"
+    replicate_model = f"labprototypes/lamjane:{VERSION_SHA}"
+
+    # In-memory HEADS (used when DATABASE_URL is not set)
+    try:
+        exists_mem = any(
+            (h.get("name") == "Jane") or (h.get("trigger") == "lamjane")
+            for h in HEADS.values()
+        )
+        if not exists_mem:
+            create_head({
+                "name": "Jane",
+                "trigger": "lamjane",
+                "model_version": replicate_model,
+                "params": {},
+                "prompt_template": "a photo of a {token} female model",
+            })
+    except Exception as _:
+        pass
+
+    # DB seeding (HeadProfile), if DB mode enabled
+    if USE_DB:
+        try:
+            from sqlalchemy import select
+            sess = get_session()
+            try:
+                hp = sess.execute(
+                    select(models.HeadProfile).where(
+                        (models.HeadProfile.trigger_token == "lamjane") | (models.HeadProfile.name == "Jane")
+                    )
+                ).scalar_one_or_none()
+                if not hp:
+                    hp = models.HeadProfile(
+                        name="Jane",
+                        replicate_model=replicate_model,
+                        trigger_token="lamjane",
+                        prompt_template="a photo of a {token} female model",
+                        params={},
+                    )
+                    sess.add(hp)
+                    sess.commit()
+            finally:
+                sess.close()
+        except Exception as _:
+            # Do not crash API startup on seed failure
+            pass
+
+# seed at import
+_seed_default_head_jane()
 
 
 def _now() -> float: return time()

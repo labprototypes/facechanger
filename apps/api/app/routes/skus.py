@@ -125,7 +125,7 @@ def submit_sku(sku_code: str, body: SubmitReq):
     if head_obj and not USE_DB:
         head_payload = {
             "trigger_token": head_obj.get("trigger"),
-            "prompt_template": head_obj.get("params", {}).get("prompt_template", "a photo of {token} female model"),
+            "prompt_template": head_obj.get("prompt_template") or "a photo of {token} female model",
             "model_version": head_obj.get("model_version"),
             "params": head_obj.get("params") or {},
         }
