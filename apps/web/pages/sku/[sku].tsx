@@ -73,7 +73,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
     const lastRef = React.useRef<{x:number,y:number}|null>(null);
 
     useEffect(() => {
-      if (!frame.original_url) return;
+      if (!frame?.id) return;
       const im = new Image();
       im.crossOrigin = 'anonymous';
       im.onload = () => {
@@ -89,15 +89,19 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
         requestAnimationFrame(syncOverlay);
       };
       im.onerror = () => setPaintMsg('Не удалось загрузить оригинал');
-      im.src = frame.original_url;
+      // Use stable internal endpoint that redirects to presigned URL
+      const base = process.env.NEXT_PUBLIC_API_URL || '';
+      im.src = `${base}/internal/frame/${frame.id}/original`;
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [frame.original_url]);
+    }, [frame?.id]);
 
     const getScales = () => {
       const cont = containerRef.current; const im = imgRef.current; const ov = overlayRef.current;
       if (!cont || !im || !ov) return { dispW: 0, dispH: 0, sx: 1, sy: 1 };
-      const cw = cont.clientWidth; const ratio = im.naturalWidth / im.naturalHeight;
-      const dispW = cw; const dispH = Math.round(cw / ratio);
+      // use actual displayed size of img element inside container
+      const imgEl = cont.querySelector('img.__painter_original') as HTMLImageElement | null;
+      const dispW = imgEl?.clientWidth || cont.clientWidth;
+      const dispH = imgEl?.clientHeight || Math.round((im.naturalHeight / im.naturalWidth) * dispW);
       const sx = im.naturalWidth / dispW; const sy = im.naturalHeight / dispH;
       return { dispW, dispH, sx, sy };
     };
@@ -108,10 +112,8 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
       const { dispW, dispH } = getScales();
       ov.width = dispW; ov.height = dispH;
       const ctx = ov.getContext('2d')!;
-      ctx.clearRect(0,0,ov.width,ov.height);
-      // draw original for reference
-      ctx.drawImage(im, 0, 0, ov.width, ov.height);
-      // overlay mask preview with multiply
+  ctx.clearRect(0,0,ov.width,ov.height);
+  // draw only mask preview to avoid CORS-taint; original is a DOM <img> under the canvas
       ctx.save();
       ctx.globalAlpha = 0.6;
       ctx.filter = 'none';
@@ -189,10 +191,12 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
           <button onClick={onSave} className="px-2 py-1 rounded font-medium" style={{ background: ACCENT }}>Сохранить маску</button>
         </div>
         <div ref={containerRef} className="relative w-full" style={{ maxWidth: '100%' }}>
-          {/* overlay canvas used for display and pointer events */}
+          {/* Original image rendered via internal endpoint for stability */}
+          <img src={`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frame.id}/original`} alt="orig" className="__painter_original block w-full select-none pointer-events-none" draggable={false} />
+          {/* overlay canvas used for mask preview and pointer events */}
           <canvas
             ref={overlayRef}
-            className="block w-full touch-none"
+            className="block w-full touch-none absolute inset-0"
             onPointerDown={onDown}
             onPointerMove={onMove}
             onPointerUp={onUp}

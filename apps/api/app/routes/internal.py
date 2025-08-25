@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 import boto3
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 # ---- store API (функции должны быть реализованы в apps/api/app/store.py) ----
@@ -99,6 +99,19 @@ def _best_url_for_key(key: str) -> str:
             return _s3_public_url(key)
     else:
         return _s3_public_url(key)
+
+def _stream_object(key: str) -> Response:
+    """Stream object bytes directly from S3 as a Response.
+    Fallback if redirect/presign is not desired or fails. Useful to keep same-origin URL for the browser.
+    """
+    try:
+        cli = _s3_client()
+        obj = cli.get_object(Bucket=S3_BUCKET, Key=key)
+        data = obj["Body"].read()
+        ctype = obj.get("ContentType") or "application/octet-stream"
+        return Response(content=data, media_type=ctype)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"object not found: {e}")
 
 
 # =============================================================================
@@ -281,6 +294,30 @@ def internal_frame_info(frame_id: int):
         raise HTTPException(status_code=404, detail="frame not found")
 
     return _frame_to_public_json(fr)
+
+@router.get("/frame/{frame_id}/original")
+def internal_frame_original(frame_id: int, download: bool = False):
+    """Return a stable URL for the original image used for mask painting.
+    Strategy:
+    - If original_key is known, return a Redirect to a presigned GET URL (always signed regardless of S3_REQUIRE_SIGNED),
+      falling back to direct streaming if presign failed.
+    - If only original_url is stored, redirect to it as-is.
+    """
+    fr = get_frame(int(frame_id))
+    if not fr:
+        raise HTTPException(status_code=404, detail="frame not found")
+    key = fr.get("original_key")
+    if key:
+        try:
+            url = _s3_signed_get(key)
+            return RedirectResponse(url)
+        except Exception:
+            # As a last resort, stream the object via API
+            return _stream_object(key)
+    url = fr.get("original_url")
+    if url:
+        return RedirectResponse(url)
+    raise HTTPException(status_code=404, detail="original not available")
 
 
 @router.post("/frame/{frame_id}/generation")
