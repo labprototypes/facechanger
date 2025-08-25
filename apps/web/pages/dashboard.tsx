@@ -57,7 +57,12 @@ export default function DashboardBatches() {
             <button className="px-4 py-2 rounded-xl border flex items-center gap-2" style={{ background: SURFACE }} onClick={() => {refetchBatches(); refetchSkus();}}>
               <RefreshCcw size={16} /> Обновить
             </button>
-            <button className="px-4 py-2 rounded-xl font-medium flex items-center gap-2" style={{ background: ACCENT, color: TEXT }}>
+            <button
+              className="px-4 py-2 rounded-xl font-medium flex items-center gap-2"
+              style={{ background: ACCENT, color: TEXT, opacity: activeDate ? 1 : 0.6 }}
+              disabled={!activeDate}
+              onClick={() => { if(activeDate){ window.open(`${apiBase}/internal/batch/${activeDate}/export.zip`, '_blank'); } }}
+            >
               <Download size={16} /> Экспорт батча
             </button>
           </div>
