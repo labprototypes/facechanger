@@ -7,7 +7,10 @@ import {
 } from "lucide-react";
 import useSWR from "swr";
 
-const BG = "#f5f5f5"; const TEXT = "#000000"; const SURFACE = "#ffffff"; const ACCENT = "#B8FF01";
+import Button from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
+import { Badge } from "../components/ui/Badge";
+const BG = "var(--bg)"; const TEXT = "var(--text)"; const SURFACE = "var(--surface)"; const ACCENT = "var(--accent)";
 
 interface BatchSummary { date: string; total: number; inProgress: number; done: number; failed: number; }
 interface SkuRow { id: number; sku: string; brand?: string | null; headProfile?: string | null | number; frames: number; done: number; status: "IN_PROGRESS" | "DONE" | "FAILED"; updatedAt: string; is_done?: boolean; }
@@ -54,39 +57,30 @@ export default function DashboardBatches() {
             <p className="text-sm md:text-base mt-1 opacity-80">Переключайтесь между днями, смотрите прогресс по SKU и ищите по коду.</p>
           </div>
           <div className="flex items-center gap-2">
-            <button className="px-4 py-2 rounded-xl border flex items-center gap-2" style={{ background: SURFACE }} onClick={() => {refetchBatches(); refetchSkus();}}>
-              <RefreshCcw size={16} /> Обновить
-            </button>
-            <button
-              className="px-4 py-2 rounded-xl font-medium flex items-center gap-2"
-              style={{ background: ACCENT, color: TEXT, opacity: activeDate ? 1 : 0.6 }}
-              disabled={!activeDate}
-              onClick={() => { if(activeDate){ window.open(`${apiBase}/internal/batch/${activeDate}/export.zip`, '_blank'); } }}
-            >
-              <Download size={16} /> Экспорт батча
-            </button>
+            <Button onClick={() => {refetchBatches(); refetchSkus();}} className="flex items-center gap-2"><RefreshCcw size={16} /> Обновить</Button>
+            <Button disabled={!activeDate} onClick={() => { if(activeDate){ window.open(`${apiBase}/internal/batch/${activeDate}/export.zip`, '_blank'); } }} variant="primary" className={!activeDate? 'opacity-60 cursor-not-allowed':''}><Download size={16} /> Экспорт батча</Button>
           </div>
         </div>
 
         <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3">
-          <div className="rounded-2xl p-4 border border-black/10 flex items-center justify-between gap-2" style={{ background: SURFACE }}>
+          <Card className="p-4 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2"><CalendarDays size={18} /><span className="font-medium">День:</span><span>{activeDate || '—'}</span></div>
             <div className="flex items-center gap-2">
-              <button onClick={prevDay} className="p-2 rounded-xl border" style={{ background: SURFACE }} aria-label="Предыдущий день"><ChevronLeft size={18} /></button>
-              <button onClick={nextDay} className="p-2 rounded-xl border" style={{ background: SURFACE }} aria-label="Следующий день"><ChevronRight size={18} /></button>
+              <Button onClick={prevDay} size="sm" aria-label="Предыдущий день"><ChevronLeft size={18} /></Button>
+              <Button onClick={nextDay} size="sm" aria-label="Следующий день"><ChevronRight size={18} /></Button>
             </div>
-          </div>
-          <div className="rounded-2xl p-4 border border-black/10" style={{ background: SURFACE }}>
+          </Card>
+          <Card className="p-4">
             <div className="text-sm opacity-80 mb-1">Бренд</div>
             <div className="flex gap-2 flex-wrap">
               {brands.map(b => {
                 const act = b === activeBrand;
-                return <button key={b} onClick={()=>{setActiveBrand(b);}} className={`px-3 py-1 rounded-full border text-sm ${act?'font-semibold':''}`} style={{ background: act? ACCENT : SURFACE }}>{b}</button>;
+                return <Button key={b} onClick={()=>{setActiveBrand(b);}} className={`rounded-full ${act?'font-semibold':''}`} variant={act? 'primary':'secondary'} size="sm">{b}</Button>;
               })}
             </div>
-          </div>
+          </Card>
 
-          <div className="rounded-2xl p-4 border border-black/10 lg:col-span-2" style={{ background: SURFACE }}>
+          <Card className="p-4 lg:col-span-2">
             <div className="flex items-center gap-3">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2" size={18} />
@@ -99,15 +93,9 @@ export default function DashboardBatches() {
                   style={{ background: SURFACE, color: TEXT }}
                 />
               </div>
-              <button
-                onClick={() => query.trim() && goToSku(query.trim())}
-                className="px-4 py-2 rounded-xl font-medium flex items-center gap-2"
-                style={{ background: ACCENT, color: TEXT }}
-              >
-                Найти <ArrowUpRight size={16} />
-              </button>
+              <Button onClick={() => query.trim() && goToSku(query.trim())} variant="primary" className="flex items-center gap-2">Найти <ArrowUpRight size={16} /></Button>
             </div>
-          </div>
+          </Card>
         </div>
 
         <div className="mb-6 flex gap-2 overflow-auto pb-1">
@@ -123,7 +111,7 @@ export default function DashboardBatches() {
           })}
         </div>
 
-        <div className="rounded-2xl border border-black/10 overflow-hidden" style={{ background: SURFACE }}>
+        <Card className="overflow-hidden">
           <div className="grid grid-cols-12 px-4 py-3 border-b border-black/10 text-sm font-medium">
             <div className="col-span-3">SKU</div><div className="col-span-2">Бренд</div><div className="col-span-1">Head</div><div className="col-span-2">Кадров</div><div className="col-span-2">Прогресс</div><div className="col-span-2">Обновлено</div>
           </div>
@@ -131,10 +119,10 @@ export default function DashboardBatches() {
             {rows.map((r) => {
               const p = percent(r.done, r.frames);
               const badge = r.status === 'DONE'
-                ? <span className="px-2 py-1 rounded-full border"><CheckCircle2 className="inline -mt-1" size={14}/> Готово</span>
+                ? <Badge tone="accent"><CheckCircle2 className="inline -mt-0.5 mr-1" size={14}/> Готово</Badge>
                 : r.status === 'FAILED'
-                  ? <span className="px-2 py-1 rounded-full border"><AlertCircle className="inline -mt-1" size={14}/> Ошибка</span>
-                  : <span className="px-2 py-1 rounded-full border"><Clock className="inline -mt-1" size={14}/> В работе</span>;
+                  ? <Badge tone="muted"><AlertCircle className="inline -mt-0.5 mr-1" size={14}/> Ошибка</Badge>
+                  : <Badge><Clock className="inline -mt-0.5 mr-1" size={14}/> В работе</Badge>;
               const rowBg = r.is_done ? ACCENT : SURFACE;
               return (
                 <div key={r.id} className="grid grid-cols-12 px-4 py-3 border-t border-black/10 items-center" style={{ background: rowBg, transition: 'background 0.3s' }}>
@@ -145,7 +133,7 @@ export default function DashboardBatches() {
                     >
                       <Package size={16} /> {r.sku}
                     </button>
-                    <button onClick={() => { if(confirm(`Удалить SKU ${r.sku}?`)){ fetch(`${apiBase}/api/skus/${r.sku}`, { method: 'DELETE'}).then(()=> refetchSkus()); } }} className="mt-1 text-[10px] px-2 py-1 rounded border border-red-400 text-red-600">Удалить</button>
+                    <Button onClick={() => { if(confirm(`Удалить SKU ${r.sku}?`)){ fetch(`${apiBase}/api/skus/${r.sku}`, { method: 'DELETE'}).then(()=> refetchSkus()); } }} size="sm" variant="destructive" className="mt-1">Удалить</Button>
                   </div>
                   <div className="col-span-2 opacity-80">{r.brand || '—'}</div>
                   <div className="col-span-1 opacity-80">{r.headProfile || '—'}</div>
@@ -159,7 +147,7 @@ export default function DashboardBatches() {
               );
             })}
           </div>
-        </div>
+        </Card>
       </div>
     </div>
   );

@@ -1,11 +1,14 @@
 // apps/web/pages/upload.tsx
 // @ts-nocheck
 import React, { useMemo, useState, useEffect } from "react";
+import Button from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
+import { Input, Select } from "../components/ui/Input";
 
-const BG = "#f5f5f5";
-const TEXT = "#000000";
-const SURFACE = "#ffffff";
-const ACCENT = "#B8FF01";
+const BG = "var(--bg)";
+const TEXT = "var(--text)";
+const SURFACE = "var(--surface)";
+const ACCENT = "var(--accent)";
 
 // Публичный URL API (из переменной окружения Render)
 const BACKEND_FALLBACK = 'https://api-backend-ypst.onrender.com';
@@ -185,48 +188,32 @@ export default function UploadBySkuPage() {
         <div className="mt-6 grid gap-4">
           <div>
             <label className="text-sm opacity-80">Бренд</label>
-            <select
-              className="mt-1 w-full px-3 py-2 rounded-xl border border-black/10"
-              style={{ background: SURFACE, color: TEXT }}
-              value={brand}
-              onChange={e => setBrand(e.target.value)}
-            >
+            <Select className="mt-1" value={brand} onChange={e => setBrand(e.target.value)}>
               {brands.map(b => <option key={b}>{b}</option>)}
-            </select>
+            </Select>
           </div>
           <div>
             <label className="text-sm opacity-80">SKU</label>
-            <input
-              value={sku}
-              onChange={(e) => setSku(e.target.value.toUpperCase())}
-              placeholder="Например: SKU-TEST-001"
-              className="mt-1 w-full px-3 py-2 rounded-xl border border-black/10"
-              style={{ background: SURFACE, color: TEXT }}
-            />
+            <Input value={sku} onChange={(e) => setSku(e.target.value.toUpperCase())} placeholder="Например: SKU-TEST-001" className="mt-1" />
           </div>
 
           <div>
             <label className="text-sm opacity-80">Head (модель)</label>
-            <select
-              className="mt-1 w-full px-3 py-2 rounded-xl border border-black/10"
-              style={{ background: SURFACE, color: TEXT }}
-              value={headId ?? ''}
-              onChange={e => setHeadId(e.target.value ? Number(e.target.value) : null)}
-            >
+            <Select className="mt-1" value={headId ?? ''} onChange={e => setHeadId(e.target.value ? Number(e.target.value) : null)}>
               <option value="">— default</option>
               {heads.map(h => (
                 <option key={h.id} value={h.id}>{h.name}</option>
               ))}
-            </select>
+            </Select>
           </div>
 
           <div>
             <label className="text-sm opacity-80">Файлы</label>
-            <div
+            <Card
               onDragOver={e=>{e.preventDefault(); setDrag(true);}}
               onDragLeave={e=>{e.preventDefault(); setDrag(false);}}
               onDrop={onDrop}
-              className={`mt-1 w-full rounded-2xl border border-dashed p-8 text-center text-sm transition ${drag? 'bg-lime-50 border-lime-400':'border-black/20'}`}
+              className={`mt-1 w-full border-dashed p-8 text-center text-sm transition ${drag? 'bg-lime-50 border-lime-400':''}`}
               style={{ background: drag? '#f6ffe0' : SURFACE, color: TEXT }}
             >
               <p className="mb-2">Choose files or drop here</p>
@@ -237,13 +224,13 @@ export default function UploadBySkuPage() {
                   <input type="file" multiple className="hidden" onChange={onPick} />
                 </label>
               </div>
-            </div>
+            </Card>
             {files.length > 0 && (
               <div className="mt-4 grid grid-cols-5 gap-3">
                 {files.map((f, idx)=>(
                   <div key={idx} className="relative group aspect-square rounded-lg overflow-hidden bg-black/10 flex items-center justify-center">
                     <img src={URL.createObjectURL(f)} className="object-cover w-full h-full" />
-                    <button onClick={()=> setFiles(prev => prev.filter((_,i)=>i!==idx))} className="absolute top-1 right-1 w-6 h-6 rounded-full bg-white/80 text-xs border hover:bg-white shadow">✕</button>
+                    <Button onClick={()=> setFiles(prev => prev.filter((_,i)=>i!==idx))} className="absolute top-1 right-1 w-6 h-6 rounded-full !p-0 text-xs" size="sm">✕</Button>
                   </div>
                 ))}
               </div>
@@ -251,16 +238,7 @@ export default function UploadBySkuPage() {
           </div>
 
           <div className="flex gap-3">
-            <button
-              disabled={disabled}
-              onClick={handleSend}
-              className={`px-4 py-2 rounded-xl font-medium ${
-                disabled ? "opacity-50 cursor-not-allowed" : ""
-              }`}
-              style={{ background: ACCENT, color: TEXT }}
-            >
-              Отправить в работу
-            </button>
+            <Button disabled={disabled} onClick={handleSend} variant="primary" className={disabled? 'opacity-50 cursor-not-allowed':''}>Отправить в работу</Button>
             {stage !== "idle" && <span className="text-sm opacity-80">{msg}</span>}
           </div>
         </div>

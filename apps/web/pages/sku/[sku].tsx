@@ -3,8 +3,13 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/router";
 import { fetchSkuViewByCode as fetchSkuView, setFrameMask, requestUploadUrls, putToSignedUrl } from "../../lib/api";
+import Button from "../../components/ui/Button";
+import { Card } from "../../components/ui/Card";
+import { Badge } from "../../components/ui/Badge";
+import { Input, Textarea, Select } from "../../components/ui/Input";
+import { Slider } from "../../components/ui/Slider";
 
-const BG = "#f2f2f2"; const TEXT = "#000000"; const SURFACE = "#ffffff"; const ACCENT = "#B8FF01";
+const BG = "var(--bg)"; const TEXT = "var(--text)"; const SURFACE = "var(--surface)"; const ACCENT = "var(--accent)";
 function FrameMedia({ original, maskUrl, versions, onPreview, frame }: any) {
   const [ratioStr, setRatioStr] = useState<string>('1 / 1');
   useEffect(() => {
@@ -38,7 +43,7 @@ function Modal({ open, onClose, children }: { open: boolean; onClose: () => void
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="absolute inset-0 flex items-center justify-center p-4">
         <div className="relative w-full max-w-5xl rounded-2xl shadow-lg" style={{ background: SURFACE, color: TEXT }}>
-          <button onClick={onClose} className="absolute right-3 top-3 px-3 py-1 rounded-lg border" style={{ background: SURFACE }}>Закрыть</button>
+          <Button onClick={onClose} className="absolute right-3 top-3" size="sm">Закрыть</Button>
           <div className="p-4">{children}</div>
         </div>
       </div>
@@ -61,7 +66,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
   const [prompt, setPrompt] = useState<string>(initialPrompt);
   const [promptStrength, setPromptStrength] = useState<number>(frame.pending_params?.prompt_strength ?? 0.8);
   const [steps, setSteps] = useState<number>(frame.pending_params?.num_inference_steps ?? 50);
-  const [guidanceScale, setGuidanceScale] = useState<number>(frame.pending_params?.guidance_scale ?? 3);
+  const [guidanceScale, setGuidanceScale] = useState<number>(frame.pending_params?.guidance_scale ?? 2);
   const [numOutputs, setNumOutputs] = useState<number>(frame.pending_params?.num_outputs ?? 3);
   const [format, setFormat] = useState<string>(frame.pending_params?.output_format || 'png');
   const [paintOpen, setPaintOpen] = useState(false);
@@ -204,16 +209,16 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
     };
 
     return (
-      <div className="mt-2 border rounded-lg p-2" style={{ background: SURFACE }}>
+      <Card className="mt-2 p-2">
         <div className="flex items-center gap-3 text-xs mb-2">
           <span>Кисть:</span>
-          <input type="range" min={8} max={160} step={2} value={brush} onChange={e=>setBrush(parseInt(e.target.value)||8)} className="w-40" />
+          <Slider min={8} max={160} step={2} value={[brush]} onValueChange={(v)=>setBrush(v?.[0]||8)} />
           <span className="tabular-nums w-12 text-right">{brush}px</span>
           <span className="ml-2">Режим:</span>
-          <button onClick={()=>setMode('draw')} className={`px-2 py-1 rounded border ${mode==='draw'?'font-semibold':''}`} style={{ background: SURFACE }}>Рисовать</button>
-          <button onClick={()=>setMode('erase')} className={`px-2 py-1 rounded border ${mode==='erase'?'font-semibold':''}`} style={{ background: SURFACE }}>Стирать</button>
-          <button onClick={onClear} className="ml-auto px-2 py-1 rounded border" style={{ background: SURFACE }}>Очистить</button>
-          <button onClick={onSave} className="px-2 py-1 rounded font-medium" style={{ background: ACCENT }}>Сохранить маску</button>
+          <Button onClick={()=>setMode('draw')} size="sm" variant={mode==='draw'?'primary':'secondary'}>Рисовать</Button>
+          <Button onClick={()=>setMode('erase')} size="sm" variant={mode==='erase'?'primary':'secondary'}>Стирать</Button>
+          <Button onClick={onClear} size="sm" className="ml-auto">Очистить</Button>
+          <Button onClick={onSave} size="sm" variant="primary">Сохранить маску</Button>
         </div>
         <div ref={containerRef} className="relative w-full" style={{ maxWidth: '100%' }}>
           {/* Original image rendered via internal endpoint for stability */}
@@ -230,7 +235,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
           {!loaded && <div className="absolute inset-0 flex items-center justify-center text-xs opacity-70">Загрузка оригинала…</div>}
         </div>
         {paintMsg && <div className="mt-2 text-xs opacity-70">{paintMsg}</div>}
-      </div>
+      </Card>
     );
   };
 
@@ -257,13 +262,13 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
   };
 
   return (
-    <div className="rounded-2xl p-3 shadow-sm border flex flex-col" style={{ background: accepted? ACCENT : SURFACE, borderColor: '#0000001a' }}>
+  <Card className="p-3 flex flex-col" style={{ background: accepted? ACCENT : SURFACE }}>
     <div className="flex items-center justify-between mb-3">
         <div className="text-sm opacity-70">Кадр #{frame.seq || frame.id}</div>
         <div className="flex items-center gap-2">
-      {isGenerating && <span className="px-2 py-1 rounded-lg text-xs border" style={{ background: SURFACE }}>Готовим новые генерации…</span>}
-          {maskUrl && <span className="px-2 py-1 rounded-lg text-xs border" style={{ background: SURFACE }}>Маска</span>}
-          {accepted && <span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Pinned</span>}
+      {isGenerating && <Badge>Готовим новые генерации…</Badge>}
+      {maskUrl && <Badge>Маска</Badge>}
+      {accepted && <Badge>Pinned</Badge>}
         </div>
       </div>
   <div className="mb-3">
@@ -307,28 +312,28 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
         {versions.length === 0 && <div className="mt-3 text-xs opacity-60 italic">Ждём результаты…</div>}
       </div>
       <div className="flex flex-wrap gap-2 mt-1">
-        <button onClick={()=>setManualOpen(v=>!v)} className="px-3 py-1 rounded-lg text-sm font-medium border" style={{ background: SURFACE }}>Ручная настройка</button>
-        <button onClick={()=>window.dispatchEvent(new CustomEvent('delete-frame', { detail: { frameId: frame.id } }))} className="px-3 py-1 rounded-lg text-sm font-medium border border-red-400 text-red-600" style={{ background: SURFACE }}>Удалить</button>
+        <Button onClick={()=>setManualOpen(v=>!v)}>Ручная настройка</Button>
+        <Button onClick={()=>window.dispatchEvent(new CustomEvent('delete-frame', { detail: { frameId: frame.id } }))} variant="destructive">Удалить</Button>
       </div>
       {manualOpen && (
-        <div className="mt-3 rounded-xl border border-black/10 p-3 flex flex-col gap-3" style={{ background: SURFACE }}>
+    <Card className="mt-3 p-3 flex flex-col gap-3">
           <div className="grid grid-cols-1 gap-3">
             <div>
               <label className="text-xs font-medium">Prompt</label>
-              <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={2} className="mt-1 w-full text-xs p-2 rounded border" style={{ background: SURFACE }} />
+        <Textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={2} className="mt-1 text-xs" />
             </div>
             <div className="grid grid-cols-5 gap-2 text-xs">
-              <div><label className="block">Strength</label><input type="number" step="0.01" min={0.1} max={1} value={promptStrength} onChange={e=>setPromptStrength(parseFloat(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
-              <div><label className="block">Steps</label><input type="number" min={8} max={120} value={steps} onChange={e=>setSteps(parseInt(e.target.value)||0)} className="mt-1 w-full p-1 rounded border"/></div>
-              <div><label className="block">Guidance</label><input type="number" step="0.1" min={1} max={15} value={guidanceScale} onChange={e=>setGuidanceScale(parseFloat(e.target.value))} className="mt-1 w-full p-1 rounded border"/></div>
-              <div><label className="block">Outputs</label><input type="number" min={1} max={6} value={numOutputs} onChange={e=>setNumOutputs(parseInt(e.target.value)||1)} className="mt-1 w-full p-1 rounded border"/></div>
-              <div><label className="block">Format</label><select value={format} onChange={e=>setFormat(e.target.value)} className="mt-1 w-full p-1 rounded border"><option value="png">png</option><option value="webp">webp</option><option value="jpeg">jpeg</option></select></div>
+        <div><label className="block">Strength</label><Input type="number" step="0.01" min={0.1} max={1} value={promptStrength} onChange={e=>setPromptStrength(parseFloat(e.target.value))} className="mt-1"/></div>
+        <div><label className="block">Steps</label><Input type="number" min={8} max={120} value={steps} onChange={e=>setSteps(parseInt(e.target.value)||0)} className="mt-1"/></div>
+        <div><label className="block">Guidance</label><Input type="number" step="0.1" min={1} max={15} value={guidanceScale} onChange={e=>setGuidanceScale(parseFloat(e.target.value))} className="mt-1"/></div>
+        <div><label className="block">Outputs</label><Input type="number" min={1} max={6} value={numOutputs} onChange={e=>setNumOutputs(parseInt(e.target.value)||1)} className="mt-1"/></div>
+        <div><label className="block">Format</label><Select value={format} onChange={e=>setFormat(e.target.value)} className="mt-1"><option value="png">png</option><option value="webp">webp</option><option value="jpeg">jpeg</option></Select></div>
             </div>
             <div>
               <label className="text-xs font-medium flex items-center gap-2">Маска {maskUploading && <span className="text-[10px] opacity-60">загрузка…</span>}</label>
               <div className="mt-1 flex items-center gap-2">
-                <input type="file" accept="image/png,image/jpeg" disabled={maskUploading} onChange={e=>{ const f=e.target.files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
-                <button onClick={()=> setPaintOpen(v=>!v)} className="px-2 py-1 rounded border text-xs" style={{ background: SURFACE }}>{paintOpen? 'Скрыть рисование' : 'Нарисовать маску'}</button>
+        <Input type="file" accept="image/png,image/jpeg" disabled={maskUploading} onChange={e=>{ const f=(e.target as any).files?.[0]; if(f) uploadMask(f); }} className="text-xs" />
+        <Button size="sm" onClick={()=> setPaintOpen(v=>!v)}>{paintOpen? 'Скрыть рисование' : 'Нарисовать маску'}</Button>
                 {maskError && <span className="text-[10px] text-red-600">{maskError}</span>}
               </div>
               <p className="mt-1 text-[10px] opacity-60">Можно загрузить свою маску (применится к следующей генерации).</p>
@@ -336,12 +341,12 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
             </div>
           </div>
           <div className="flex gap-2 flex-wrap text-xs">
-            <button onClick={regenerate} className="px-3 py-1 rounded-lg font-medium" style={{ background: ACCENT }}>Перегенерировать</button>
-            <button onClick={()=>setManualOpen(false)} className="px-3 py-1 rounded-lg border" style={{ background: SURFACE }}>Отмена</button>
+      <Button onClick={regenerate} variant="primary">Перегенерировать</Button>
+      <Button onClick={()=>setManualOpen(false)}>Отмена</Button>
           </div>
-        </div>
+    </Card>
       )}
-    </div>
+  </Card>
   );
 }
 
@@ -456,15 +461,15 @@ export default function SkuPage() {
             <p className="text-sm md:text-base mt-1 opacity-80">Оригиналы, маски и результаты. Клик по варианту — полноразмер.</p>
           </div>
           <div className="flex items-center gap-4 text-sm">
-            <button onClick={load} className="px-3 py-1 rounded-lg border" style={{ background: SURFACE }}>Обновить</button>
-            <button onClick={toggleSkuDone} className="px-3 py-1 rounded-lg border text-xs font-medium" style={{ background: skuDone? SURFACE : ACCENT }}>{skuDone? 'Снять Готово' : 'Готово'}</button>
+            <Button onClick={load}>Обновить</Button>
+            <Button onClick={toggleSkuDone} variant={skuDone? 'secondary':'primary'}>{skuDone? 'Снять Готово' : 'Готово'}</Button>
             <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)} /> авто</label>
             <div className="w-40 h-2 bg-black/10 rounded-full overflow-hidden">
               <div className="h-full transition-all" style={{ width: `${progressPct}%`, background: skuDone? '#ffffff' : ACCENT }} />
             </div>
             <span className="text-xs opacity-70 w-10 text-right">{progressPct}%</span>
-            <button onClick={deleteSku} className="px-3 py-1 rounded-lg border text-xs text-red-600 border-red-400" style={{ background: SURFACE }}>Удалить SKU</button>
-            <a href={`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/sku/by-code/${sku}/export.zip`} className="px-3 py-1 rounded-lg border text-xs" style={{ background: SURFACE }}>Экспорт SKU</a>
+            <Button onClick={deleteSku} variant="destructive">Удалить SKU</Button>
+            <a href={`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/sku/by-code/${sku}/export.zip`} className="inline-flex items-center rounded-lg border px-3 py-1 text-sm bg-surface">Экспорт SKU</a>
             {/* removed favorites download button */}
             {allDone && <span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Готово</span>}
           </div>
@@ -500,7 +505,7 @@ export default function SkuPage() {
               </div>
               <div className="mt-3 flex items-center justify-end gap-3">
                 <a target="_blank" rel="noreferrer" href={previewCtx.frame.outputs?.[previewCtx.variant]?.url || previewCtx.frame.outputs?.[previewCtx.variant]} className="px-3 py-2 rounded-lg font-medium border text-sm" style={{ background: SURFACE }}>Открыть</a>
-                <button className="px-3 py-2 rounded-lg font-medium" style={{ background: ACCENT, color: TEXT }} onClick={()=>setPreviewOpen(false)}>Закрыть</button>
+                <Button onClick={()=>setPreviewOpen(false)} variant="primary">Закрыть</Button>
               </div>
             </div>
           </div>

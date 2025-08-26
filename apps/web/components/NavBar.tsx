@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
-
-const ACCENT = "#B8FF01";
+const ACCENT = "var(--accent)";
 
 export default function NavBar() {
   const { pathname } = useRouter();
@@ -13,9 +12,9 @@ export default function NavBar() {
         href={href}
         className="px-4 py-2 rounded-xl font-medium border"
         style={{
-          background: "#ffffff",
-          color: "#000000",
-          borderColor: active ? ACCENT : "#0000001a",
+          background: "var(--surface)",
+          color: "var(--text)",
+          borderColor: active ? ACCENT : "var(--border)",
           boxShadow: active ? `0 0 0 2px ${ACCENT} inset` : undefined,
         }}
       >
@@ -25,7 +24,7 @@ export default function NavBar() {
   };
 
   return (
-    <div className="sticky top-0 z-40 border-b" style={{ background: "var(--bg)", borderColor: "#00000014" }}>
+  <div className="sticky top-0 z-40 border-b" style={{ background: "var(--bg)", borderColor: "var(--border)" }}>
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
         <div className="text-lg font-semibold">Facechanger</div>
         <div className="flex gap-2">

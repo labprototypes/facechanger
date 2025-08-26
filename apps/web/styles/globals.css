@@ -4,8 +4,26 @@
 
 :root{
   --bg:#f2f2f2;
-  --text:#000000;
+  --text:#0a0a0a;
   --surface:#ffffff;
+  --surface-2:#f9f9f9;
+  --border:#0000001a;
   --accent:#B8FF01;
+  --accent-contrast:#0a0a0a; /* text on accent */
+  --accent-soft: color-mix(in srgb, var(--accent) 30%, #ffffff 70%);
+  --accent-hover: #a6e600; /* slightly darker */
+  --accent-press: #92cc00; /* darker */
+  --ring: var(--accent);
 }
+
 body{background:var(--bg);color:var(--text);}
+
+/* Focus ring baseline */
+:focus-visible{
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Skeleton shimmer */
+.skeleton{position: relative; overflow: hidden; background: linear-gradient(90deg, #e9e9e9, #f4f4f4, #e9e9e9); background-size: 200% 100%; animation: skeleton 1.2s ease-in-out infinite;}
+@keyframes skeleton{0%{background-position:200% 0}100%{background-position:-200% 0}}
