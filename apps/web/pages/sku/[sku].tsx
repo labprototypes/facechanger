@@ -72,6 +72,10 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
   const [paintOpen, setPaintOpen] = useState(false);
   const [paintMsg, setPaintMsg] = useState<string>("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const waitingByStatus = useMemo(() => {
+    const st = String(frame.status || '').toUpperCase();
+    return isGenerating || st === 'QUEUED' || st === 'GENERATING' || st === 'RUNNING';
+  }, [frame.status, isGenerating]);
 
   const uploadMask = async (file: File) => {
     setMaskError(null); setMaskUploading(true);
@@ -240,7 +244,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
   };
 
   const regenerate = async () => {
-    try {
+  try {
       setIsGenerating(true);
       await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frame.id}/redo`, {
         method: 'POST',
@@ -256,9 +260,12 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
         })
       });
       setManualOpen(false);
+      // Сразу обновим и запустим наблюдение на 20с интервале до завершения
+      const initialVersionsLen = (versions && versions.length) || (outs.length ? 1 : 0) || 0;
       window.dispatchEvent(new CustomEvent('reload-sku'));
+      window.dispatchEvent(new CustomEvent('watch-frame', { detail: { frameId: frame.id, initialVersionsLen } }));
     } catch(e) { console.error(e); }
-    finally { setTimeout(()=>setIsGenerating(false), 2000); }
+    finally { /* оставим флаг до статуса от сервера */ }
   };
 
   return (
@@ -266,7 +273,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
     <div className="flex items-center justify-between mb-3">
         <div className="text-sm opacity-70">Кадр #{frame.seq || frame.id}</div>
         <div className="flex items-center gap-2">
-      {isGenerating && <Badge>Готовим новые генерации…</Badge>}
+  {waitingByStatus && <Badge>Готовим новые генерации…</Badge>}
       {maskUrl && <Badge>Маска</Badge>}
       {accepted && <Badge>Pinned</Badge>}
         </div>
@@ -362,6 +369,7 @@ export default function SkuPage() {
   const [exporting, setExporting] = useState(false);
   const [exportUrls, setExportUrls] = useState<string[] | null>(null);
   const [copied, setCopied] = useState(false);
+  const watcherRef = React.useRef<{ stop?: ()=>void } | null>(null);
 
   const allDone = useMemo(() => (data?.frames?.length ? data.frames.every((f:any)=>f.outputs && f.outputs.length>0) : false), [data]);
   const progressPct = useMemo(()=>{
@@ -388,6 +396,32 @@ export default function SkuPage() {
   useEffect(()=>{
     const h = () => load();
     window.addEventListener('reload-sku', h);
+    // локальный наблюдатель за конкретным кадром после redo
+    const onWatch = (e: any) => {
+      const frameId = e?.detail?.frameId;
+      // ускоренный поллинг на 20 сек, каждые 2 сек
+      if (!frameId) return;
+      const start = Date.now();
+      const poll = async () => {
+        await load();
+        // если в данных по кадру появились новые outputs (или статус сменился на done) — останавливаем
+        try {
+          const fr = (data?.frames || []).find((f:any)=>f.id===frameId);
+          const st = String(fr?.status||'').toUpperCase();
+          const done = st === 'DONE' || ((fr?.outputs||[]).length>0);
+          if (done || Date.now() - start > 20000) {
+            watcherRef.current = null;
+            return;
+          }
+        } catch {}
+        if (Date.now() - start <= 20000) {
+          watcherRef.current = { stop: () => { watcherRef.current = null; } };
+          setTimeout(poll, 2000);
+        }
+      };
+      poll();
+    };
+    window.addEventListener('watch-frame', onWatch as any);
     return () => window.removeEventListener('reload-sku', h);
   }, [sku]);
 
@@ -430,8 +464,8 @@ export default function SkuPage() {
       .catch(err=> console.error(err));
   };
   useEffect(()=> {
-    window.addEventListener('delete-frame', deleteFrameHandler as any);
-    return ()=> window.removeEventListener('delete-frame', deleteFrameHandler as any);
+  if (!auto || allDone) return;
+  const id = setInterval(load, 5000);
   }, [sku]);
 
   const deleteSku = () => {
