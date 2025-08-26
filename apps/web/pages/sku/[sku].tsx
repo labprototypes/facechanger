@@ -74,8 +74,10 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
   const [isGenerating, setIsGenerating] = useState(false);
   const waitingByStatus = useMemo(() => {
     const st = String(frame.status || '').toUpperCase();
+    const hasOuts = Array.isArray(frame.outputs) && frame.outputs.length > 0;
+    if (hasOuts || st === 'DONE') return false;
     return isGenerating || st === 'QUEUED' || st === 'GENERATING' || st === 'RUNNING';
-  }, [frame.status, isGenerating]);
+  }, [frame.status, isGenerating, frame.outputs]);
 
   const uploadMask = async (file: File) => {
     setMaskError(null); setMaskUploading(true);
@@ -261,7 +263,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
       });
       setManualOpen(false);
       // Сразу обновим и запустим наблюдение на 20с интервале до завершения
-      const initialVersionsLen = (versions && versions.length) || (outs.length ? 1 : 0) || 0;
+  const initialVersionsLen = (versions && versions.length) || (outs.length ? 1 : 0) || 0;
       window.dispatchEvent(new CustomEvent('reload-sku'));
       window.dispatchEvent(new CustomEvent('watch-frame', { detail: { frameId: frame.id, initialVersionsLen } }));
     } catch(e) { console.error(e); }
@@ -363,7 +365,6 @@ export default function SkuPage() {
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [auto, setAuto] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewCtx, setPreviewCtx] = useState<{ frame: any; variant: number }|null>(null);
   const [exporting, setExporting] = useState(false);
@@ -387,11 +388,6 @@ export default function SkuPage() {
       .finally(()=>setLoading(false));
   };
   useEffect(load, [sku]);
-  useEffect(()=>{
-    if (!auto || allDone) return;
-    const id = setInterval(load, 5000);
-    return ()=>clearInterval(id);
-  }, [auto, allDone, sku]);
 
   useEffect(()=>{
     const h = () => load();
@@ -399,21 +395,26 @@ export default function SkuPage() {
     // локальный наблюдатель за конкретным кадром после redo
     const onWatch = (e: any) => {
       const frameId = e?.detail?.frameId;
+      const initialVersionsLen = e?.detail?.initialVersionsLen ?? 0;
       // ускоренный поллинг на 20 сек, каждые 2 сек
       if (!frameId) return;
       const start = Date.now();
       const poll = async () => {
-        await load();
-        // если в данных по кадру появились новые outputs (или статус сменился на done) — останавливаем
         try {
-          const fr = (data?.frames || []).find((f:any)=>f.id===frameId);
+          const latest = await fetchSkuView(String(sku));
+          setData(latest);
+          const fr = (latest?.frames || []).find((f:any)=>f.id===frameId);
           const st = String(fr?.status||'').toUpperCase();
-          const done = st === 'DONE' || ((fr?.outputs||[]).length>0);
+          const curVersionsLen = (fr?.outputs_versions?.length) || ((fr?.outputs?.length ? 1 : 0));
+          const hasNew = curVersionsLen > initialVersionsLen;
+          const done = st === 'DONE' || hasNew;
           if (done || Date.now() - start > 20000) {
             watcherRef.current = null;
             return;
           }
-        } catch {}
+        } catch (err) {
+          // swallow and retry until timeout
+        }
         if (Date.now() - start <= 20000) {
           watcherRef.current = { stop: () => { watcherRef.current = null; } };
           setTimeout(poll, 2000);
@@ -422,7 +423,10 @@ export default function SkuPage() {
       poll();
     };
     window.addEventListener('watch-frame', onWatch as any);
-    return () => window.removeEventListener('reload-sku', h);
+    return () => {
+      window.removeEventListener('reload-sku', h);
+      window.removeEventListener('watch-frame', onWatch as any);
+    };
   }, [sku]);
 
   if (!sku) return <div className="p-6">Загрузка…</div>;
@@ -463,10 +467,7 @@ export default function SkuPage() {
       .then(()=> load())
       .catch(err=> console.error(err));
   };
-  useEffect(()=> {
-  if (!auto || allDone) return;
-  const id = setInterval(load, 5000);
-  }, [sku]);
+  // removed global auto-refresh; rely on manual refresh and post-redo watcher
 
   const deleteSku = () => {
     if (!sku) return;
@@ -497,7 +498,6 @@ export default function SkuPage() {
           <div className="flex items-center gap-4 text-sm">
             <Button onClick={load}>Обновить</Button>
             <Button onClick={toggleSkuDone} variant={skuDone? 'secondary':'primary'}>{skuDone? 'Отменить' : 'Принять'}</Button>
-            <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)} /> авто</label>
             <div className="w-40 h-2 bg-black/10 rounded-full overflow-hidden">
               <div className="h-full transition-all" style={{ width: `${progressPct}%`, background: skuDone? '#ffffff' : ACCENT }} />
             </div>
