@@ -72,12 +72,28 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
   const [paintOpen, setPaintOpen] = useState(false);
   const [paintMsg, setPaintMsg] = useState<string>("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const expectedVersRef = React.useRef<number | null>(null);
   const waitingByStatus = useMemo(() => {
     const st = String(frame.status || '').toUpperCase();
-    const hasOuts = Array.isArray(frame.outputs) && frame.outputs.length > 0;
-    if (hasOuts || st === 'DONE') return false;
+    // Показываем индикатор при локально запущенной генерации или при статусах очереди/генерации/выполнения
     return isGenerating || st === 'QUEUED' || st === 'GENERATING' || st === 'RUNNING';
-  }, [frame.status, isGenerating, frame.outputs]);
+  }, [frame.status, isGenerating]);
+
+  // Снимаем локальный флаг ожидания, когда пришла новая версия или статус DONE
+  useEffect(() => {
+    const curLen = Array.isArray(frame.outputs_versions) ? frame.outputs_versions.length : ((frame.outputs?.length ? 1 : 0));
+    if (expectedVersRef.current != null && curLen > expectedVersRef.current) {
+      setIsGenerating(false);
+      expectedVersRef.current = null;
+    }
+  }, [frame.outputs_versions, frame.outputs]);
+  useEffect(() => {
+    const st = String(frame.status || '').toUpperCase();
+    if (st === 'DONE') {
+      setIsGenerating(false);
+      expectedVersRef.current = null;
+    }
+  }, [frame.status]);
 
   const uploadMask = async (file: File) => {
     setMaskError(null); setMaskUploading(true);
@@ -248,6 +264,9 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
   const regenerate = async () => {
   try {
       setIsGenerating(true);
+  // запоминаем текущую длину версий, чтобы понять, когда появится новая
+  const curLen = Array.isArray(versions) ? versions.length : (outs.length ? 1 : 0);
+  expectedVersRef.current = curLen;
       await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frame.id}/redo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -263,7 +282,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
       });
       setManualOpen(false);
       // Сразу обновим и запустим наблюдение на 20с интервале до завершения
-  const initialVersionsLen = (versions && versions.length) || (outs.length ? 1 : 0) || 0;
+  const initialVersionsLen = curLen || 0;
       window.dispatchEvent(new CustomEvent('reload-sku'));
       window.dispatchEvent(new CustomEvent('watch-frame', { detail: { frameId: frame.id, initialVersionsLen } }));
     } catch(e) { console.error(e); }
@@ -319,6 +338,9 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
           );
         })}
         {versions.length === 0 && <div className="mt-3 text-xs opacity-60 italic">Ждём результаты…</div>}
+        {waitingByStatus && (
+          <div className="mt-2 text-xs opacity-70 italic">Ожидаем новые генерации для этого кадра…</div>
+        )}
       </div>
       <div className="flex flex-wrap gap-2 mt-1">
         <Button onClick={()=>setManualOpen(v=>!v)}>Ручная настройка</Button>
@@ -493,7 +515,7 @@ export default function SkuPage() {
         <div className="mb-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>
             <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">SKU: {sku}</h1>
-            <p className="text-sm md:text-base mt-1 opacity-80">Оригиналы, маски и результаты. Клик по варианту — полноразмер.</p>
+            <p className="text-sm md:text-base mt-1 opacity-80">Проверь генерации на корректность, внеси ручные изменения, если необходимо.</p>
           </div>
           <div className="flex items-center gap-4 text-sm">
             <Button onClick={load}>Обновить</Button>
