@@ -462,16 +462,16 @@ export default function SkuPage() {
           </div>
           <div className="flex items-center gap-4 text-sm">
             <Button onClick={load}>Обновить</Button>
-            <Button onClick={toggleSkuDone} variant={skuDone? 'secondary':'primary'}>{skuDone? 'Снять Готово' : 'Готово'}</Button>
+            <Button onClick={toggleSkuDone} variant={skuDone? 'secondary':'primary'}>{skuDone? 'Отменить' : 'Принять'}</Button>
             <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)} /> авто</label>
             <div className="w-40 h-2 bg-black/10 rounded-full overflow-hidden">
               <div className="h-full transition-all" style={{ width: `${progressPct}%`, background: skuDone? '#ffffff' : ACCENT }} />
             </div>
             <span className="text-xs opacity-70 w-10 text-right">{progressPct}%</span>
             <Button onClick={deleteSku} variant="destructive">Удалить SKU</Button>
-            <a href={`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/sku/by-code/${sku}/export.zip`} className="inline-flex items-center rounded-lg border px-3 py-1 text-sm bg-surface">Экспорт SKU</a>
+            <a href={`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/sku/by-code/${sku}/export.zip`} className="inline-flex items-center justify-center text-center rounded-lg border px-3 py-1 text-sm bg-surface">Экспорт SKU</a>
             {/* removed favorites download button */}
-            {allDone && <span className="px-2 py-1 rounded-full border text-xs" style={{ background: SURFACE }}>Готово</span>}
+            {/* removed 'Готово' badge */}
           </div>
         </div>
 
