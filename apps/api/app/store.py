@@ -106,6 +106,58 @@ def _seed_default_head_jane():
 # seed at import
 _seed_default_head_jane()
 
+def _seed_head_egor():
+    """Ensure head model "Egor" (smegor) exists in both in-memory registry and DB (if enabled)."""
+    VERSION_SHA = "48692e8f17f3271a9fe19ac5311bead0ab89c7b9399e38a72c55a9facee6b5cb"
+    replicate_model = f"labprototypes/smegor:{VERSION_SHA}"
+
+    # In-memory
+    try:
+        exists_mem = any(
+            (h.get("name") == "Egor") or (h.get("trigger") == "smegor")
+            for h in HEADS.values()
+        )
+        if not exists_mem:
+            create_head({
+                "name": "Egor",
+                "trigger": "smegor",
+                "model_version": replicate_model,
+                "params": {},
+                "prompt_template": "a front photo of a smegor plus-size male model",
+            })
+    except Exception:
+        pass
+
+    # DB seeding
+    if USE_DB:
+        try:
+            from sqlalchemy import select
+            sess = get_session()
+            try:
+                hp = sess.execute(
+                    select(models.HeadProfile).where(
+                        (models.HeadProfile.trigger_token == "smegor") | (models.HeadProfile.name == "Egor")
+                    )
+                ).scalar_one_or_none()
+                if not hp:
+                    hp = models.HeadProfile(
+                        name="Egor",
+                        replicate_model=replicate_model,
+                        trigger_token="smegor",
+                        prompt_template="a front photo of a smegor plus-size male model",
+                        params={},
+                    )
+                    sess.add(hp)
+                    sess.commit()
+            finally:
+                sess.close()
+        except Exception:
+            # Do not crash API startup on seed failure
+            pass
+
+# seed Egor at import
+_seed_head_egor()
+
 
 def _now() -> float: return time()
 
