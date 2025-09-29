@@ -7,7 +7,9 @@ from celery import Celery
 import httpx
 import numpy as np
 import cv2
-from PIL import Image
+from PIL import Image, ImageOps
+import tempfile
+import math
 try:
     from ultralytics import YOLO  # YOLOv8
     _YOLO_MODEL_LOAD_ERROR = None
@@ -180,6 +182,39 @@ def ensure_presigned_download(url: Optional[str] = None, key: Optional[str] = No
     if url:
         return url
     raise ValueError("ensure_presigned_download: neither url nor key provided")
+
+# ======== Preprocess & Image helpers ========
+def decode_image_bgr_with_exif(img_bytes: bytes) -> np.ndarray:
+    """Decode image bytes honoring EXIF orientation; return BGR np array."""
+    try:
+        pil_img = Image.open(io.BytesIO(img_bytes))
+        try:
+            pil_img = ImageOps.exif_transpose(pil_img)
+        except Exception:
+            pass
+        if pil_img.mode not in ("RGB", "RGBA"):
+            pil_img = pil_img.convert("RGB")
+        if pil_img.mode == "RGBA":
+            # drop alpha for processing
+            pil_img = pil_img.convert("RGB")
+        arr = np.array(pil_img)  # RGB
+        bgr = arr[..., ::-1].copy()
+        return bgr
+    except Exception:
+        # fallback to cv2 if PIL fails
+        arr = np.frombuffer(img_bytes, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise RuntimeError("Failed to decode image with PIL/cv2")
+        return img
+
+def bgr_to_jpeg_bytes(img_bgr: np.ndarray, quality: int = 90) -> bytes:
+    """Encode BGR image to JPEG bytes with given quality."""
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), int(max(1, min(100, quality)))]
+    ok, buf = cv2.imencode(".jpg", img_bgr, encode_param)
+    if not ok:
+        raise RuntimeError("Failed to encode image to JPEG")
+    return buf.tobytes()
 
 # ======== IO helpers ========
 def http_get_bytes(url: str, timeout: int = 60) -> bytes:
@@ -551,10 +586,56 @@ def process_frame(frame_id: int):
     if not original_url:
         raise RuntimeError("Frame has no original_url or original_key")
 
-    # 2) Маска: стратегия — face -> pose -> (optional segmentation/person based on flags) -> person -> center
+    # 2) Предобработка оригинала: downscale при необходимости и подготовка локального файла/URL для модели и сегментации
+    presigned_original = ensure_presigned_download(original_url, original_key)
+    orig_bytes = http_get_bytes(presigned_original, timeout=120)
+    orig_bgr = decode_image_bgr_with_exif(orig_bytes)
+    H0, W0 = orig_bgr.shape[:2]
+    max_long = int(os.environ.get("PREPROCESS_MAX_LONG_SIDE", "3000"))
+    target_long = int(os.environ.get("PREPROCESS_TARGET_LONG_SIDE", "2560"))
+    jpeg_q = int(os.environ.get("PREPROCESS_JPEG_QUALITY", "90"))
+    resized_applied = False
+    use_bgr = orig_bgr
+    # local file for mask generator
+    local_image_path: Optional[str] = None
+    # S3 key/url for the image passed to the model
+    model_image_key: Optional[str] = None
+    model_image_url: Optional[str] = None
+    if max(W0, H0) > max_long:
+        resized_applied = True
+        scale = float(target_long) / float(max(W0, H0))
+        new_w = int(round(W0 * scale))
+        new_h = int(round(H0 * scale))
+        # ensure >= 64 and multiple of 2 to be safe
+        new_w = max(64, int(round(new_w / 2.0) * 2))
+        new_h = max(64, int(round(new_h / 2.0) * 2))
+        use_bgr = cv2.resize(orig_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        # save local temp JPEG for mask generator
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
+            tmp_img.write(bgr_to_jpeg_bytes(use_bgr, quality=jpeg_q))
+            local_image_path = tmp_img.name
+        # upload resized image for model & segmentation
+        model_image_key = f"resized/{sku_code}/{frame_id}.jpg"
+        with open(local_image_path, "rb") as f:
+            s3_put_bytes(model_image_key, f.read(), content_type="image/jpeg")
+        model_image_url = ensure_presigned_download(None, model_image_key)
+        print(f"[worker] frame {frame_id}: downscaled original {W0}x{H0} -> {new_w}x{new_h}")
+    else:
+        # keep original; write to temp for mask generator (use .png to be safe)
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_in:
+            tmp_in.write(orig_bytes)
+            local_image_path = tmp_in.name
+        model_image_url = presigned_original
+        model_image_key = original_key
+
+    # 3) Маска: используем существующую или генерируем; если изображение было уменьшено — приводим маску к тем же размерам
     existing_mask_key = info.get("mask_key")
-    overwrite = os.environ.get("HEAD_MASK_OVERWRITE", "0") == "1"
-    if existing_mask_key and not overwrite:
+    overwrite_env = os.environ.get("HEAD_MASK_OVERWRITE", "0") == "1"
+    mask_key: Optional[str] = None
+    mask_url: Optional[str] = None
+    had_existing_mask = bool(existing_mask_key) and not overwrite_env
+    if existing_mask_key and not overwrite_env and not resized_applied:
+        # безопасно переиспользовать как есть (совпадают размеры с оригиналом)
         mask_key = existing_mask_key
         print(f"[worker] frame {frame_id}: reuse existing mask {mask_key}")
         mask_url = s3_client().generate_presigned_url(
@@ -562,53 +643,77 @@ def process_frame(frame_id: int):
             Params={"Bucket": S3_BUCKET, "Key": mask_key},
             ExpiresIn=3600,
         )
-    else:
-        # скачиваем оригинал локально для head mask (используем presigned для приватного)
-        presigned_original = ensure_presigned_download(original_url, original_key)
-        img_bytes = http_get_bytes(presigned_original, timeout=120)
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_in:
-            tmp_in.write(img_bytes)
-            tmp_in_path = tmp_in.name
-        # Provide presigned original URL to segmentation fallback so Replicate can fetch image
+    elif existing_mask_key and not overwrite_env and resized_applied:
+        # Скачать и привести пользовательскую маску к размерам use_bgr
+        try:
+            m_presigned = ensure_presigned_download(None, existing_mask_key)
+            m_bytes = http_get_bytes(m_presigned, timeout=120)
+            m_img = Image.open(io.BytesIO(m_bytes))
+            # derive grayscale/binary
+            if m_img.mode in ("RGBA", "LA"):
+                m_arr = np.array(m_img.split()[-1])
+            else:
+                m_arr = np.array(m_img.convert("L"))
+            # resize with nearest
+            Ht, Wt = use_bgr.shape[:2]
+            m_rs = cv2.resize(m_arr, (Wt, Ht), interpolation=cv2.INTER_NEAREST)
+            m_bin = (m_rs > 127).astype(np.uint8) * 255
+            # upload under separate key to avoid overwriting user mask
+            mask_key = f"masks-resized/{sku_code}/{frame_id}.png"
+            s3_put_bytes(mask_key, png_bytes_from_array(m_bin), content_type="image/png")
+            mask_url = ensure_presigned_download(None, mask_key)
+            print(f"[worker] frame {frame_id}: resized existing mask to {Wt}x{Ht}")
+        except Exception as e:
+            print(f"[worker] frame {frame_id}: failed to resize existing mask, will auto-generate. err={e}")
+            mask_key = None
+            mask_url = None
+
+    if mask_key is None or mask_url is None:
+        # Генерируем автоматически маску по уменьшенному/оригинальному изображению
         force_seg = (info.get("pending_params") or {}).get("force_segmentation_mask") is True
-        # Для форсированной сегментации: временно ставим переменную окружения HEAD_SEGMENT_BEFORE_PERSON=1
         old_before = os.environ.get("HEAD_SEGMENT_BEFORE_PERSON")
         if force_seg:
             os.environ["HEAD_SEGMENT_BEFORE_PERSON"] = "1"
         try:
-            meta, mask_path = generate_head_mask_auto(tmp_in_path, "/tmp/head_mask.png", ensure_presigned_download(original_url, original_key))
+            meta, mask_path = generate_head_mask_auto(local_image_path, "/tmp/head_mask.png", model_image_url)
         finally:
             if force_seg:
                 if old_before is None:
                     os.environ.pop("HEAD_SEGMENT_BEFORE_PERSON", None)
                 else:
                     os.environ["HEAD_SEGMENT_BEFORE_PERSON"] = old_before
-        # загрузка маски в S3 (унифицированный ключ)
-        mask_key = f"masks/{sku_code}/{frame_id}.png"
-        with open(mask_path, "rb") as f:
-            put_mask_to_s3(mask_key, f.read())
-        # регистрация mask_key + meta в API (без вызова /redo чтобы не запускать лишнюю генерацию)
-        try:
-            payload = {"key": mask_key}
-            if isinstance(meta, dict):
-                if meta.get("strategy"):
-                    payload["strategy"] = meta.get("strategy")
-                if meta.get("box"):
-                    payload["box"] = list(meta.get("box")) if not isinstance(meta.get("box"), list) else meta.get("box")
-            with httpx.Client(timeout=30) as c:
-                c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/mask", json=payload)
-        except Exception as e:
-            print(f"[worker] failed to register mask key frame={frame_id}: {e}")
-        print(f"[worker] frame {frame_id}: auto mask strategy={meta.get('strategy')} box={meta.get('box')}")
-        # безопасный URL для Replicate (presign)
+        # загрузка маски в S3
+        # Если была пользовательская маска и мы работаем с уменьшенным изображением —
+        # не перезаписываем оригинальную маску; кладём рядом в masks-resized/ и НЕ регистрируем в API
+        if resized_applied and had_existing_mask:
+            mask_key = f"masks-resized/{sku_code}/{frame_id}.png"
+            with open(mask_path, "rb") as f:
+                put_mask_to_s3(mask_key, f.read())
+            print(f"[worker] frame {frame_id}: auto mask generated for resized image (kept user's original mask)")
+        else:
+            mask_key = f"masks/{sku_code}/{frame_id}.png"
+            with open(mask_path, "rb") as f:
+                put_mask_to_s3(mask_key, f.read())
+            # регистрация mask_key + meta в API (без вызова /redo чтобы не запускать лишнюю генерацию)
+            try:
+                payload = {"key": mask_key}
+                if isinstance(meta, dict):
+                    if meta.get("strategy"):
+                        payload["strategy"] = meta.get("strategy")
+                    if meta.get("box"):
+                        payload["box"] = list(meta.get("box")) if not isinstance(meta.get("box"), list) else meta.get("box")
+                with httpx.Client(timeout=30) as c:
+                    c.post(f"{API_BASE_URL}/internal/frame/{frame_id}/mask", json=payload)
+            except Exception as e:
+                print(f"[worker] failed to register mask key frame={frame_id}: {e}")
+            print(f"[worker] frame {frame_id}: auto mask generated and uploaded")
         mask_url = s3_client().generate_presigned_url(
             "get_object",
             Params={"Bucket": S3_BUCKET, "Key": mask_key},
             ExpiresIn=3600,
         )
 
-    image_url_for_model = ensure_presigned_download(original_url, original_key)
+    image_url_for_model = model_image_url
     mask_url_for_model  = ensure_presigned_download(None, mask_key)
 
     # 3) промпт (дефолтная "Маша" если профиля нет)
@@ -658,15 +763,9 @@ def process_frame(frame_id: int):
         "image": image_url_for_model,
         "mask": mask_url_for_model,
     }
-    # Try to preserve original aspect/size if model supports it: add width/height based on original image
-    # Compute from bytes we already fetched
+    # Try to preserve image aspect/size if model supports it: add width/height based on preprocessed image
     try:
-        import numpy as _np
-        import cv2 as _cv2
-        _arr = _np.frombuffer(img_bytes, _np.uint8)
-        _img = _cv2.imdecode(_arr, _cv2.IMREAD_COLOR)
-        _H, _W = _img.shape[:2]
-        # Clamp to a reasonable max while keeping ratio; round to multiple of 8
+        _H, _W = use_bgr.shape[:2]
         _max_side = int(os.environ.get("REPLICATE_MAX_SIDE", "1024"))
         scale = 1.0
         if max(_W, _H) > _max_side:
