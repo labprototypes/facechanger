@@ -64,7 +64,7 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
     || frame.head?.prompt_template?.replace?.("{token}", frame.head?.trigger_token || frame.head?.trigger || "")
     || "");
   const [prompt, setPrompt] = useState<string>(initialPrompt);
-  const [promptStrength, setPromptStrength] = useState<number>(frame.pending_params?.prompt_strength ?? 0.8);
+  const [promptStrength, setPromptStrength] = useState<number>(frame.pending_params?.prompt_strength ?? 0.9);
   const [steps, setSteps] = useState<number>(frame.pending_params?.num_inference_steps ?? 50);
   const [guidanceScale, setGuidanceScale] = useState<number>(frame.pending_params?.guidance_scale ?? 2);
   const [numOutputs, setNumOutputs] = useState<number>(frame.pending_params?.num_outputs ?? 3);

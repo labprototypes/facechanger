@@ -720,7 +720,7 @@ def process_frame(frame_id: int):
     head = info.get("head") or {}
     token = head.get("trigger_token") or head.get("trigger") or "tnkfwm1"
     tmpl = head.get("prompt_template") or head.get("prompt") or "a photo of {token} female model"
-    prompt = str(tmpl).replace("{token}", token)
+    base_prompt = str(tmpl).replace("{token}", token)
 
     # 4) регистрируем генерацию в бэке
     with httpx.Client(timeout=60) as c:
@@ -753,9 +753,38 @@ def process_frame(frame_id: int):
         if name in head_params:  # per-head default
             return head_params[name]
         return fallback
+    # Compose style-based prompt if applicable
+    eyes = (pending.get("eye_color") or "").strip()
+    hair_style = (pending.get("hair_style") or "").strip()
+    hair_color = (pending.get("hair_color") or "").strip()
+    style_parts = []
+    if eyes:
+        style_parts.append(eyes)
+    # hair as sentence: "Short dark hair" etc.
+    hair_phrase = None
+    if hair_style and hair_color:
+        # Ensure hair_style sentence-cased (first letter uppercase) in case passed lower
+        try:
+            hs = hair_style[0].upper() + hair_style[1:]
+        except Exception:
+            hs = hair_style
+        hair_phrase = f"{hs} {hair_color} hair"
+    elif hair_style:
+        try:
+            hs = hair_style[0].upper() + hair_style[1:]
+        except Exception:
+            hs = hair_style
+        hair_phrase = f"{hs} hair"
+    elif hair_color:
+        hair_phrase = f"{hair_color} hair"
+    if hair_phrase:
+        style_parts.append(hair_phrase)
+    style_suffix = (". " + ". ".join(style_parts) + ".").replace("..", ".") if style_parts else ""
+    composed_prompt = (pending.get("prompt") or (base_prompt + style_suffix)).strip()
+
     input_dict = {
-        "prompt": pending.get("prompt", prompt),
-        "prompt_strength": _p("prompt_strength", 0.8),
+        "prompt": composed_prompt,
+        "prompt_strength": _p("prompt_strength", 0.9),
         "num_outputs": _p("num_outputs", 3),
     "num_inference_steps": _p("num_inference_steps", 50),  # updated global default 50
     "guidance_scale": _p("guidance_scale", 2),

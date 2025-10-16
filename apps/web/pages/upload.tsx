@@ -54,12 +54,18 @@ async function putToS3(file: File, putUrl: string) {
 }
 
 /** шаг 3: регистрация кадров + постановка в очередь воркеру */
-async function submitSku(sku: string, items: { key: string; name: string }[], headId: number | null, brand: string | null) {
+async function submitSku(
+  sku: string,
+  items: { key: string; name: string }[],
+  headId: number | null,
+  brand: string | null,
+  options: { hair_style: string; hair_color: string; eye_color: string }
+) {
   const base = apiBase ? `${apiBase}` : '';
   const res = await fetch(`${base}/api/skus/${encodeURIComponent(sku)}/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ items, enqueue: true, head_id: headId, brand }),
+    body: JSON.stringify({ items, enqueue: true, head_id: headId, brand, ...options }),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
@@ -102,6 +108,10 @@ export default function UploadBySkuPage() {
   const [msg, setMsg] = useState<string>("");
   const [brand, setBrand] = useState<string>("Sportmaster");
   const [brands, setBrands] = useState<string[]>(DEFAULT_BRANDS);
+  // New required options
+  const [hairStyle, setHairStyle] = useState<string>("");
+  const [hairColor, setHairColor] = useState<string>("");
+  const [eyeColor, setEyeColor] = useState<string>("");
 
   useEffect(() => {
     const base = apiBase ? `${apiBase}` : '';
@@ -120,10 +130,14 @@ export default function UploadBySkuPage() {
     () =>
       !sku.trim() ||
       files.length === 0 ||
+      !headId ||
+      !hairStyle ||
+      !hairColor ||
+      !eyeColor ||
       stage === "getting" ||
       stage === "uploading" ||
       stage === "submitting",
-    [sku, files, stage]
+    [sku, files, stage, headId, hairStyle, hairColor, eyeColor]
   );
 
   const addFiles = (incoming: File[]) => {
@@ -159,7 +173,11 @@ export default function UploadBySkuPage() {
 
       setStage("submitting");
       setMsg("Регистрируем кадры и ставим в очередь...");
-  const resp = await submitSku(sku.trim(), items, headId, brand);
+      const resp = await submitSku(sku.trim(), items, headId, brand, {
+        hair_style: hairStyle,
+        hair_color: hairColor,
+        eye_color: eyeColor,
+      });
 
       setStage("done");
       setMsg(
@@ -203,6 +221,44 @@ export default function UploadBySkuPage() {
               {heads.map(h => (
                 <option key={h.id} value={h.id}>{h.name}</option>
               ))}
+            </Select>
+          </div>
+
+          {/* New options: required */}
+          <div>
+            <label className="text-sm opacity-80">Тип прически</label>
+            <Select className="mt-1" value={hairStyle} onChange={e=> setHairStyle(e.target.value)}>
+              <option value="">— выберите —</option>
+              <option value="Pony-tail">Хвост: Pony-tail</option>
+              <option value="Straight medium lenght">Прямые средней длины: Straight medium lenght</option>
+              <option value="Straight long lenght">Прямые длинные: Straight long lenght</option>
+              <option value="Curly medium lenght">Кудрявые средней длины: Curly medium lenght</option>
+              <option value="Curly long">Кудрявые длинные: Curly long</option>
+              <option value="Wavy medium lenght">Волнистые длинные: Wavy medium lenght</option>
+              <option value="Wavy long">Волнистые средней длины: Wavy long</option>
+              <option value="Buzz-cut">Под машинку: Buzz-cut</option>
+              <option value="Short">Короткие волосы: Short</option>
+              <option value="Messy short">Неряшливые короткой длины: Messy short</option>
+              <option value="Messy medium lenght">Неряшливые средней длины: Messy medium lenght</option>
+            </Select>
+          </div>
+          <div>
+            <label className="text-sm opacity-80">Цвет волос</label>
+            <Select className="mt-1" value={hairColor} onChange={e=> setHairColor(e.target.value)}>
+              <option value="">— выберите —</option>
+              <option value="Blonde">Блонд: Blonde</option>
+              <option value="Brunette">Брюнет: Brunette</option>
+              <option value="Dark">Темный: Dark</option>
+              <option value="Black">Черный: Black</option>
+            </Select>
+          </div>
+          <div>
+            <label className="text-sm opacity-80">Цвет глаз</label>
+            <Select className="mt-1" value={eyeColor} onChange={e=> setEyeColor(e.target.value)}>
+              <option value="">— выберите —</option>
+              <option value="with blue eyes">Голубой: with blue eyes</option>
+              <option value="with green eyes">Зеленый: with green eyes</option>
+              <option value="with brown eyes">Коричневый: with brown eyes</option>
             </Select>
           </div>
 

@@ -53,6 +53,10 @@ class SubmitReq(BaseModel):
     head_id: Optional[int] = 1  # ссылка на head profile/registry (in-memory HEADS)
     enqueue: bool = True
     brand: Optional[str] = None
+    # New style options (required by frontend)
+    hair_style: Optional[str] = None
+    hair_color: Optional[str] = None
+    eye_color: Optional[str] = None
 
 def _ensure_sku(code: str, brand: Optional[str] = None) -> int:
     if USE_DB:
@@ -97,6 +101,12 @@ def submit_sku(sku_code: str, body: SubmitReq):
 
     sku_id = _ensure_sku(sku_code, brand=body.brand)
 
+    # Validate required style fields
+    if not body.head_id:
+        raise HTTPException(422, "head_id is required")
+    if not body.hair_style or not body.hair_color or not body.eye_color:
+        raise HTTPException(422, "hair_style, hair_color and eye_color are required")
+
     # Resolve / persist head_profile for DB mode
     if USE_DB and body.head_id:
         head_obj = HEADS.get(body.head_id)
@@ -131,8 +141,21 @@ def submit_sku(sku_code: str, body: SubmitReq):
         }
 
     frame_ids: List[int] = []
+    # Compose style params to persist into pending_params for each frame
+    style_params = {
+        "hair_style": body.hair_style,
+        "hair_color": body.hair_color,
+        "eye_color": body.eye_color,
+        # bump prompt_strength default to 0.9 unless user changes later
+        "prompt_strength": 0.9,
+    }
+    from ..store import replace_frame_pending_params as _set_pending
     for it in body.items:
         fid = register_frame(sku_id, original_key=it.key, head=head_payload)
+        try:
+            _set_pending(fid, style_params)
+        except Exception:
+            pass
         frame_ids.append(fid)
 
     queued = False
