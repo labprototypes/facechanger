@@ -649,11 +649,11 @@ def process_frame(frame_id: int):
             m_presigned = ensure_presigned_download(None, existing_mask_key)
             m_bytes = http_get_bytes(m_presigned, timeout=120)
             m_img = Image.open(io.BytesIO(m_bytes))
-            # derive grayscale/binary
-            if m_img.mode in ("RGBA", "LA"):
-                m_arr = np.array(m_img.split()[-1])
-            else:
+            # Always use luminance for user masks; alpha channel of painter PNG is opaque -> would produce full-white mask
+            try:
                 m_arr = np.array(m_img.convert("L"))
+            except Exception:
+                m_arr = np.array(m_img if m_img.mode == "L" else m_img.convert("L"))
             # resize with nearest
             Ht, Wt = use_bgr.shape[:2]
             m_rs = cv2.resize(m_arr, (Wt, Ht), interpolation=cv2.INTER_NEAREST)
