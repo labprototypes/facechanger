@@ -27,6 +27,8 @@ import boto3
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, RedirectResponse, Response
 from pydantic import BaseModel
+import io
+from PIL import Image, ImageOps
 
 # ---- store API (функции должны быть реализованы в apps/api/app/store.py) ----
 from ..store import (
@@ -318,6 +320,68 @@ def internal_frame_original(frame_id: int, download: bool = False):
     if url:
         return RedirectResponse(url)
     raise HTTPException(status_code=404, detail="original not available")
+
+@router.get("/frame/{frame_id}/preview")
+def internal_frame_preview(frame_id: int):
+    """Return a stable URL for a resized preview used by the mask painter.
+    Logic:
+    - Read original image from S3 by original_key.
+    - Downscale if long side exceeds PREVIEW_MAX_LONG_SIDE (default 2560), maintaining aspect ratio and format preference (JPEG for RGB).
+    - Store under resized/{sku_code}/{frame_id}.jpg (consistent with worker) and return a presigned/public URL.
+    - If resized already exists, just return its URL.
+    """
+    from ..store import get_frame
+    fr = get_frame(int(frame_id))
+    if not fr:
+        raise HTTPException(status_code=404, detail="frame not found")
+    key = fr.get("original_key")
+    sku = fr.get("sku") or {}
+    sku_code = sku.get("code") or f"sku_{sku.get('id') or frame_id}"
+    if not key:
+        raise HTTPException(status_code=404, detail="original key missing")
+    # target key for resized preview
+    target_key = f"resized/{sku_code}/{frame_id}.jpg"
+    cli = _s3_client()
+    # try head on target
+    try:
+        cli.head_object(Bucket=S3_BUCKET, Key=target_key)
+        return RedirectResponse(_best_url_for_key(target_key))
+    except Exception:
+        pass
+    # fetch original bytes
+    try:
+        obj = cli.get_object(Bucket=S3_BUCKET, Key=key)
+        data = obj["Body"].read()
+        ctype = obj.get("ContentType") or "application/octet-stream"
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"cannot read original: {e}")
+    # decode with EXIF and resize if needed
+    try:
+        im = Image.open(io.BytesIO(data))
+        try:
+            im = ImageOps.exif_transpose(im)
+        except Exception:
+            pass
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGB")
+        W, H = im.size
+        max_long = int(os.environ.get("PREVIEW_MAX_LONG_SIDE", os.environ.get("PREPROCESS_TARGET_LONG_SIDE", "2560")))
+        if max(W, H) > max_long:
+            if W >= H:
+                new_w = max_long
+                new_h = int(H * (max_long / float(W)))
+            else:
+                new_h = max_long
+                new_w = int(W * (max_long / float(H)))
+            im = im.resize((new_w, new_h), resample=Image.Resampling.LANCZOS)
+        # always store JPEG for browser-friendly preview
+        out = io.BytesIO()
+        im.save(out, format="JPEG", quality=int(os.environ.get("PREVIEW_JPEG_QUALITY", "90")))
+        out.seek(0)
+        cli.put_object(Bucket=S3_BUCKET, Key=target_key, Body=out.getvalue(), ContentType="image/jpeg")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"cannot build preview: {e}")
+    return RedirectResponse(_best_url_for_key(target_key))
 
 
 @router.post("/frame/{frame_id}/generation")

@@ -142,9 +142,9 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
         requestAnimationFrame(syncOverlay);
       };
       im.onerror = () => setPaintMsg('Не удалось загрузить оригинал');
-      // Use stable internal endpoint that redirects to presigned URL
-      const base = process.env.NEXT_PUBLIC_API_URL || '';
-      im.src = `${base}/internal/frame/${frame.id}/original`;
+  // Use preview endpoint (resized image for mask painting)
+  const base = process.env.NEXT_PUBLIC_API_URL || '';
+  im.src = `${base}/internal/frame/${frame.id}/preview`;
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [frame?.id]);
 
@@ -243,8 +243,8 @@ function FrameCard({ frame, onPreview }: { frame: any; onPreview: (variantIndex:
           <Button onClick={onSave} size="sm" variant="primary">Сохранить маску</Button>
         </div>
         <div ref={containerRef} className="relative w-full" style={{ maxWidth: '100%' }}>
-          {/* Original image rendered via internal endpoint for stability */}
-          <img src={`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frame.id}/original`} alt="orig" className="__painter_original block w-full select-none pointer-events-none" draggable={false} />
+          {/* Preview image (resized) rendered via internal endpoint for stability */}
+          <img src={`${process.env.NEXT_PUBLIC_API_URL || ''}/internal/frame/${frame.id}/preview`} alt="preview" className="__painter_original block w-full select-none pointer-events-none" draggable={false} />
           {/* overlay canvas used for mask preview and pointer events */}
           <canvas
             ref={overlayRef}
